@@ -73,7 +73,7 @@ function KindlePowerD:afterResume()
     if self:isFrontlightOn() then
         -- Kindle stock software should turn on the front light automatically. The follow statement
         -- ensure the consistency of intensity.
-        self:setIntensityHW()
+        self:turnOnFrontlightHW()
     else
         self:turnOffFrontlightHW()
     end
