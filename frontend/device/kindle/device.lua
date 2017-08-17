@@ -37,8 +37,8 @@ Test if a kindle device has Special Offers
 --]]
 local function isSpecialOffers()
     -- Look at the current blanket modules to see if the SO screensavers are enabled...
-    local lipc = require("liblipclua")
-    if not lipc then
+    local haslipc, lipc = pcall(require, "liblipclua")
+    if not (haslipc and lipc) then
         logger.warn("could not load liblibclua")
         return true
     end
@@ -63,6 +63,16 @@ function Kindle:supportsScreensaver()
         return false
     else
         return true
+    end
+end
+
+function Kindle:setTime(hour, min)
+    if hour == nil or min == nil then return true end
+    if os.execute(string.format("date -s '%d:%d'", hour, min)) == 0 then
+        os.execute('hwclock -u -w')
+        return true
+    else
+        return false
     end
 end
 
@@ -131,9 +141,10 @@ function Kindle:ambientBrightnessLevel()
     lipc_handle:close()
     if type(value) ~= "number" then return 0 end
     if value < 10 then return 0 end
-    if value < 256 then return 1 end
-    if value < 32768 then return 2 end
-    return 3
+    if value < 96 then return 1 end
+    if value < 192 then return 2 end
+    if value < 32768 then return 3 end
+    return 4
 end
 
 
@@ -576,7 +587,7 @@ local pw2_set = Set { "D4", "5A", "D5", "D6", "D7", "D8", "F2", "17",
 local kt2_set = Set { "C6", "DD" }
 local kv_set = Set { "13", "54", "2A", "4F", "52", "53" }
 local pw3_set = Set { "0G1", "0G2", "0G4", "0G5", "0G6", "0G7",
-                  "0KB", "0KC", "0KD", "0KE", "0KF", "0KG" }
+                  "0KB", "0KC", "0KD", "0KE", "0KF", "0KG", "0LK", "0LL" }
 local koa_set = Set { "0GC", "0GD", "0GR", "0GS", "0GT", "0GU" }
 local kt3_set = Set { "0DU", "0K9", "0KA" }
 

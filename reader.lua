@@ -122,8 +122,9 @@ if fontmap ~= nil then
 end
 -- last file
 local last_file = G_reader_settings:readSetting("lastfile")
+local start_with = G_reader_settings:readSetting("start_with")
 -- load last opened file
-local open_last = G_reader_settings:readSetting("open_last")
+local open_last = start_with == "last"
 if open_last and last_file and lfs.attributes(last_file, "mode") ~= "file" then
     UIManager:show(retryLastFile())
     last_file = nil
@@ -134,30 +135,6 @@ end
 -- night mode
 if G_reader_settings:readSetting("night_mode") then
     Device.screen:toggleNightMode()
-end
-
--- restore kobo frontlight settings and probe kobo touch coordinates
-if Device:isKobo() then
-    if Device:hasFrontlight() then
-        local powerd = Device:getPowerDevice()
-        if powerd then
-            -- UIManager:init() should have sanely set up the frontlight_stuff by this point
-            local intensity = G_reader_settings:readSetting("frontlight_intensity")
-            powerd.fl_intensity = intensity or powerd.fl_intensity
-            local is_frontlight_on = G_reader_settings:readSetting("is_frontlight_on")
-            if is_frontlight_on then
-                -- default powerd.is_fl_on is false, turn it on
-                powerd:toggleFrontlight()
-            else
-                -- the light can still be turned on manually outside of KOReader
-                -- or Nickel. so we always set the intensity to 0 here to keep it
-                -- in sync with powerd.is_fl_on (false by default)
-                -- NOTE: we cant use setIntensity method here because for Kobo the
-                -- min intensity is 1 :(
-                powerd.fl:setBrightness(0)
-            end
-        end
-    end
 end
 
 if Device:needsTouchScreenProbe() then
@@ -189,6 +166,14 @@ if ARGV[argidx] and ARGV[argidx] ~= "" then
         UIManager:nextTick(function()
             FileManager:showFiles(home_dir)
         end)
+        -- always open history on top of filemanager so closing history
+        -- doesn't result in exit
+        if start_with == "history" then
+            local FileManagerHistory = require("apps/filemanager/filemanagerhistory")
+            UIManager:nextTick(function()
+                FileManagerHistory:onShowHist(last_file)
+            end)
+        end
     end
     exit_code = UIManager:run()
 elseif last_file then

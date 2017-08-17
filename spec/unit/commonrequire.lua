@@ -10,12 +10,11 @@ logger:setLevel(logger.levels.warn)
 -- global reader settings
 local DataStorage = require("datastorage")
 os.remove(DataStorage:getDataDir().."/settings.reader.lua")
-local DocSettings = require("docsettings")
 G_reader_settings = require("luasettings"):open(".reader")
 
 -- global einkfb for Screen (do not show SDL window)
-einkfb = require("ffi/framebuffer")
-einkfb.dummy = true
+einkfb = require("ffi/framebuffer") --luacheck: ignore
+einkfb.dummy = true --luacheck: ignore
 
 -- init output device
 local Screen = require("device").screen
@@ -96,4 +95,21 @@ package.unloadAll = function()
         end
     end
     return #pending
+end
+
+local background_runner
+requireBackgroundRunner = function()
+    require("pluginshare").stopBackgroundRunner = nil
+    if background_runner == nil then
+        local package_path = package.path
+        package.path = "plugins/backgroundrunner.koplugin/?.lua;" .. package.path
+        background_runner = dofile("plugins/backgroundrunner.koplugin/main.lua")
+        package.path = package_path
+    end
+    return background_runner
+end
+
+stopBackgroundRunner = function()
+    background_runner = nil
+    require("pluginshare").stopBackgroundRunner = true
 end

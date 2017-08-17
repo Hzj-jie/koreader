@@ -32,7 +32,6 @@ local order = {
     },
     setting = {
         "read_from_right_to_left",
-        "disable_fuzzy_search",
         -- common settings
         -- those that don't exist will simply be skipped during menu gen
         "frontlight", -- if Device:hasFrontlight()
@@ -44,6 +43,7 @@ local order = {
         "save_document",
         "----------------------------",
         "language",
+        "time",
         "----------------------------",
         "djvu_render_mode",
         "status_bar",
@@ -52,19 +52,26 @@ local order = {
         "read_timer",
         "calibre_wireless_connection",
         "evernote",
-        "keep_alive",
-        "frontlight_gesture_controller",
         "statistics",
-        "battery_statistics",
-        "storage_stat",
-        "synchronize_time",
         "progress_sync",
         "zsync",
         "news_downloader",
+        "----------------------------",
+        "more_plugins",
+    },
+    more_plugins = {
+        "auto_frontlight",
+        "frontlight_gesture_controller",
+        "battery_statistics",
+        "synchronize_time",
+        "keep_alive",
         "terminal",
+        "storage_stat",
     },
     search = {
         "dictionary_lookup",
+        "disable_fuzzy_search",
+        "----------------------------",
         "wikipedia_lookup",
         "----------------------------",
         "goodreads",
@@ -75,6 +82,7 @@ local order = {
     main = {
         "history",
         "book_status",
+        "book_info",
         "----------------------------",
         "ota_update", --[[ if Device:isKindle() or Device:isKobo() or
                            Device:isPocketBook() or Device:isAndroid() ]]--

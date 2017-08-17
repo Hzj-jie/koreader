@@ -146,7 +146,7 @@ describe("util module", function()
         local text = "Ce test : 1) est très simple ; 2 ) simple comme ( 2/2 ) > 50 % ? ok."
         local word = ""
         local table_of_words = {}
-        local c
+        local c, next_c
         local table_chars = util.splitToChars(text)
         for i = 1, #table_chars  do
             c = table_chars[i]
@@ -179,7 +179,7 @@ describe("util module", function()
         local text = "Ce test : 1) est « très simple » ; 2 ) simple comme ( 2/2 ) > 50 % ? ok."
         local word = ""
         local table_of_words = {}
-        local c
+        local c, next_c, prev_c
         local table_chars = util.splitToChars(text)
         for i = 1, #table_chars  do
             c = table_chars[i]
@@ -282,5 +282,18 @@ describe("util module", function()
     it("should split input to array without empty entities", function()
         assert.are_same(util.splitToArray("100  abc   def ghi200  ", " ", false),
                         {"100", "abc", "def", "ghi200"})
+    end)
+
+    it("should guess it is not HTML and let is as is", function()
+        local s = "if (i < 0 && j < 0) j = i&amp;"
+        assert.is_equal(util.htmlToPlainTextIfHtml(s), s)
+    end)
+    it("should guess it is HTML and convert it to text", function()
+        assert.is_equal(util.htmlToPlainTextIfHtml("<div> <br> Making <b>unit&nbsp;tests</b> is <i class='notreally'>fun &amp; n&#xE9;c&#233;ssaire</i><br/> </div>"),
+                    "Making unit tests is fun & nécéssaire")
+    end)
+    it("should guess it is double encoded HTML and convert it to text", function()
+        assert.is_equal(util.htmlToPlainTextIfHtml("Deux parties.&lt;br&gt;Prologue.Désespérée, elle le tue...&lt;br&gt;Première partie. Sur la route &amp;amp; dans la nuit"),
+                    "Deux parties.\nPrologue.Désespérée, elle le tue...\nPremière partie. Sur la route & dans la nuit")
     end)
 end)
