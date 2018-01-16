@@ -14,6 +14,7 @@ local Device = Generic:new{
     hasFrontlight = yes,
     isTouchDevice = yes,
     needsScreenRefreshAfterResume = no,
+    hasColorScreen = yes,
 }
 
 if os.getenv("DISABLE_TOUCH") == "1" then
@@ -33,10 +34,22 @@ function Device:init()
     end
 
     if util.haveSDL2() then
+        self.hasClipboard = yes
         self.screen = require("ffi/framebuffer_SDL2_0"):new{device = self, debug = logger.dbg}
+
+        local input = require("ffi/input")
         self.input = require("device/input"):new{
             device = self,
             event_map = require("device/sdl/event_map_sdl2"),
+            hasClipboardText = function()
+                return input.hasClipboardText()
+            end,
+            getClipboardText = function()
+                return input.getClipboardText()
+            end,
+            setClipboardText = function(text)
+                return input.setClipboardText(text)
+            end,
         }
     else
         self.screen = require("ffi/framebuffer_SDL1_2"):new{device = self, debug = logger.dbg}
@@ -59,9 +72,15 @@ function Device:init()
     Generic.init(self)
 end
 
-function Device:setTime(hour, min)
+function Device:setDateTime(year, month, day, hour, min, sec)
     if hour == nil or min == nil then return true end
-    if os.execute(string.format("date -s '%d:%d'", hour, min)) == 0 then
+    local command
+    if year and month and day then
+        command = string.format("date -s '%d-%d-%d %d:%d:%d'", year, month, day, hour, min, sec)
+    else
+        command = string.format("date -s '%d:%d'",hour, min)
+    end
+    if os.execute(command) == 0 then
         os.execute('hwclock -u -w')
         return true
     else

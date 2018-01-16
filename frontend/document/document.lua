@@ -1,12 +1,13 @@
-local TileCacheItem = require("document/tilecacheitem")
-local DrawContext = require("ffi/drawcontext")
-local Configurable = require("configurable")
 local Blitbuffer = require("ffi/blitbuffer")
-local lfs = require("libs/libkoreader-lfs")
+local Cache = require("cache")
 local CacheItem = require("cacheitem")
+local Configurable = require("configurable")
+local DrawContext = require("ffi/drawcontext")
 local Geom = require("ui/geometry")
 local Math = require("optmath")
-local Cache = require("cache")
+local Screen = require("device").screen
+local TileCacheItem = require("document/tilecacheitem")
+local lfs = require("libs/libkoreader-lfs")
 local logger = require("logger")
 
 --[[
@@ -31,6 +32,12 @@ local Document = {
 
     -- flag to show that the document is edited and needs to write back to disk
     is_edited = false,
+
+    -- whether this document can be rendered in color
+    is_color_capable = true,
+    -- bb type needed by engine for color rendering
+    color_bb_type = Blitbuffer.TYPE_BBRGB32,
+
 }
 
 function Document:new(from_o)
@@ -67,6 +74,10 @@ function Document:_init()
         author = "",
         date = ""
     }
+
+    -- Should be updated by a call to Document.updateColorRendering(self)
+    -- in subclasses
+    self.render_color = false
 end
 
 -- override this method to open a document
@@ -111,13 +122,18 @@ end
 -- Note that if PDF file size is around 1024, 4096, 16384, 65536, 262144
 -- 1048576, 4194304, 16777216, 67108864, 268435456 or 1073741824, appending data
 -- by highlighting in KOReader may change the digest value.
-function Document:fastDigest()
+function Document:fastDigest(docsettings)
     if not self.file then return end
     local file = io.open(self.file, 'rb')
     if file then
-        local docsettings = require("docsettings"):open(self.file)
+        local tmp_docsettings = false
+        if not docsettings then -- if not provided, open/create it
+            docsettings = require("docsettings"):open(self.file)
+            tmp_docsettings = true
+        end
         local result = docsettings:readSetting("partial_md5_checksum")
         if not result then
+            logger.dbg("computing and storing partial_md5_checksum")
             local md5 = require("ffi/MD5")
             local lshift = bit.lshift
             local step, size = 1024, 1024
@@ -134,7 +150,9 @@ function Document:fastDigest()
             result = m:sum()
             docsettings:saveSetting("partial_md5_checksum", result)
         end
-        docsettings:close()
+        if tmp_docsettings then
+            docsettings:close()
+        end
         file:close()
         return result
     end
@@ -264,20 +282,38 @@ function Document:findText()
     return nil
 end
 
-function Document:getFullPageHash(pageno, zoom, rotation, gamma, render_mode)
+function Document:updateColorRendering()
+    if self.is_color_capable and Screen:isColorEnabled() then
+        self.render_color = true
+    else
+        self.render_color = false
+    end
+end
+
+function Document:preRenderPage()
+    return nil
+end
+
+function Document:postRenderPage()
+    return nil
+end
+
+function Document:getFullPageHash(pageno, zoom, rotation, gamma, render_mode, color)
     return "renderpg|"..self.file.."|"..self.mod_time.."|"..pageno.."|"
-                    ..zoom.."|"..rotation.."|"..gamma.."|"..render_mode
+                    ..zoom.."|"..rotation.."|"..gamma.."|"..render_mode..(color and "|color" or "")
 end
 
 function Document:renderPage(pageno, rect, zoom, rotation, gamma, render_mode)
     local hash_excerpt
-    local hash = self:getFullPageHash(pageno, zoom, rotation, gamma, render_mode)
+    local hash = self:getFullPageHash(pageno, zoom, rotation, gamma, render_mode, self.render_color)
     local tile = Cache:check(hash, TileCacheItem)
     if not tile then
         hash_excerpt = hash.."|"..tostring(rect)
         tile = Cache:check(hash_excerpt)
     end
     if tile then return tile end
+
+    self:preRenderPage()
 
     local page_size = self:getPageDimensions(pageno, zoom, rotation)
     -- this will be the size we actually render
@@ -303,7 +339,7 @@ function Document:renderPage(pageno, rect, zoom, rotation, gamma, render_mode)
         size = size.w * size.h + 64, -- estimation
         excerpt = size,
         pageno = pageno,
-        bb = Blitbuffer.new(size.w, size.h)
+        bb = Blitbuffer.new(size.w, size.h, self.render_color and self.color_bb_type or nil)
     }
 
     -- create a draw context
@@ -330,6 +366,7 @@ function Document:renderPage(pageno, rect, zoom, rotation, gamma, render_mode)
     page:close()
     Cache:insert(hash, tile)
 
+    self:postRenderPage()
     return tile
 end
 

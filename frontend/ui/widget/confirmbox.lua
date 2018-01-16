@@ -29,9 +29,11 @@ local HorizontalGroup = require("ui/widget/horizontalgroup")
 local HorizontalSpan = require("ui/widget/horizontalspan")
 local ImageWidget = require("ui/widget/imagewidget")
 local InputContainer = require("ui/widget/container/inputcontainer")
+local Size = require("ui/size")
 local TextBoxWidget = require("ui/widget/textboxwidget")
 local UIManager = require("ui/uimanager")
 local VerticalGroup = require("ui/widget/verticalgroup")
+local VerticalSpan = require("ui/widget/verticalspan")
 local logger = require("logger")
 local _ = require("gettext")
 local Screen = Device.screen
@@ -45,34 +47,38 @@ local ConfirmBox = InputContainer:new{
     ok_callback = function() end,
     cancel_callback = function() end,
     other_buttons = nil,
-    margin = 5,
-    padding = 5,
+    margin = Size.margin.default,
+    padding = Size.padding.default,
+    dismissable = true, -- set to false if any button callback is required
 }
 
 function ConfirmBox:init()
-    if Device:isTouchDevice() then
-        self.ges_events.TapClose = {
-            GestureRange:new{
-                ges = "tap",
-                range = Geom:new{
-                    x = 0, y = 0,
-                    w = Screen:getWidth(),
-                    h = Screen:getHeight(),
+    if self.dismissable then
+        if Device:isTouchDevice() then
+            self.ges_events.TapClose = {
+                GestureRange:new{
+                    ges = "tap",
+                    range = Geom:new{
+                        x = 0, y = 0,
+                        w = Screen:getWidth(),
+                        h = Screen:getHeight(),
+                    }
                 }
             }
-        }
-    end
-    if Device:hasKeys() then
-        self.key_events = {
-            Close = { {"Back"}, doc = "cancel" }
-        }
+        end
+        if Device:hasKeys() then
+            self.key_events = {
+                Close = { {"Back"}, doc = "cancel" }
+            }
+        end
     end
     local content = HorizontalGroup:new{
         align = "center",
         ImageWidget:new{
-            file = "resources/info-i.png"
+            file = "resources/info-i.png",
+            scale_for_dpi = true,
         },
-        HorizontalSpan:new{ width = 10 },
+        HorizontalSpan:new{ width = Size.span.horizontal_default },
         TextBoxWidget:new{
             text = self.text,
             face = self.face,
@@ -125,9 +131,12 @@ function ConfirmBox:init()
             background = Blitbuffer.COLOR_WHITE,
             margin = self.margin,
             padding = self.padding,
+            padding_bottom = 0, -- no padding below buttontable
             VerticalGroup:new{
                 align = "left",
                 content,
+                -- Add same vertical space after than before content
+                VerticalSpan:new{ width = self.margin + self.padding },
                 button_table,
             }
         }

@@ -15,6 +15,7 @@ local ImageWidget = require("ui/widget/imagewidget")
 local InputContainer = require("ui/widget/container/inputcontainer")
 local LineWidget = require("ui/widget/linewidget")
 local OverlapGroup = require("ui/widget/overlapgroup")
+local Size = require("ui/size")
 local TextWidget = require("ui/widget/textwidget")
 local VerticalGroup = require("ui/widget/verticalgroup")
 local WidgetContainer = require("ui/widget/container/widgetcontainer")
@@ -41,14 +42,15 @@ local ImageViewer = InputContainer:new{
     height = nil,
     scale_factor = 0, -- start with image scaled for best fit
     rotated = false,
-    -- we use this global setting for rotation angle to have the same angle as reader
-    rotation_angle = DLANDSCAPE_CLOCKWISE_ROTATION and 90 or 270,
 
     title_face = Font:getFace("x_smalltfont"),
-    title_padding = Screen:scaleBySize(5),
-    title_margin = Screen:scaleBySize(2),
-    image_padding = Screen:scaleBySize(2),
-    button_padding = Screen:scaleBySize(14),
+    title_padding = Size.padding.default,
+    title_margin = Size.margin.title,
+    image_padding = Size.margin.small,
+    button_padding = Size.padding.default,
+
+    -- sensitivity for hold (trigger full refresh) vs pan (move image)
+    pan_threshold = Screen:scaleBySize(5),
 
     _scale_to_fit = nil, -- state of toggle between our 2 pre-defined scales (scale to fit / original size)
     _panning = false,
@@ -153,7 +155,7 @@ function ImageViewer:update()
         },
     }
     local button_table = ButtonTable:new{
-        width = self.width,
+        width = self.width - 2*self.button_padding,
         button_font_face = "cfont",
         button_font_size = 20,
         buttons = buttons,
@@ -195,7 +197,7 @@ function ImageViewer:update()
         title_sep = LineWidget:new{
             dimen = Geom:new{
                 w = self.width,
-                h = Screen:scaleBySize(2),
+                h = Size.line.thick,
             }
         }
         -- adjust height available to our image
@@ -205,6 +207,19 @@ function ImageViewer:update()
     local max_image_h = img_container_h - self.image_padding*2
     local max_image_w = self.width - self.image_padding*2
 
+    local rotation_angle = 0
+    if self.rotated then
+        -- in portrait mode, rotate according to this global setting so we are
+        -- like in landscape mode
+        local rotate_clockwise = DLANDSCAPE_CLOCKWISE_ROTATION
+        if Screen:getWidth() > Screen:getHeight() then
+            -- in landscape mode, counter-rotate landscape rotation so we are
+            -- back like in portrait mode
+            rotate_clockwise = not rotate_clockwise
+        end
+        rotation_angle = rotate_clockwise and 90 or 270
+    end
+
     self._image_wg = ImageWidget:new{
         file = self.file,
         image = self.image,
@@ -212,7 +227,7 @@ function ImageViewer:update()
         alpha = true,
         width = max_image_w,
         height = max_image_h,
-        rotation_angle = self.rotated and self.rotation_angle or 0,
+        rotation_angle = rotation_angle,
         scale_factor = self.scale_factor,
         center_x_ratio = self._center_x_ratio,
         center_y_ratio = self._center_y_ratio,
@@ -244,7 +259,6 @@ function ImageViewer:update()
     end
     self.main_frame = FrameContainer:new{
         radius = not self.fullscreen and 8 or nil,
-        bordersize = 3,
         padding = 0,
         margin = 0,
         background = Blitbuffer.COLOR_WHITE,
@@ -255,7 +269,7 @@ function ImageViewer:update()
         dimen = self.region,
         FrameContainer:new{
             bordersize = 0,
-            padding = Screen:scaleBySize(5),
+            padding = Size.padding.default,
             self.main_frame,
         }
     }
@@ -268,7 +282,7 @@ end
 
 function ImageViewer:onShow()
     UIManager:setDirty(self, function()
-        return "ui", self.main_frame.dimen
+        return "full", self.main_frame.dimen
     end)
     return true
 end
@@ -343,8 +357,8 @@ function ImageViewer:onHoldRelease(_, ges)
         self._panning = false
         self._pan_relative_x = ges.pos.x - self._pan_relative_x
         self._pan_relative_y = ges.pos.y - self._pan_relative_y
-        if self._pan_relative_x == 0 and self._pan_relative_y == 0 then
-            -- Hold with no move: use this to trigger full refresh
+        if math.abs(self._pan_relative_x) < self.pan_threshold and math.abs(self._pan_relative_y) < self.pan_threshold then
+            -- Hold with no move (or less than pan_threshold): use this to trigger full refresh
             UIManager:setDirty(nil, "full")
         else
             self:panBy(-self._pan_relative_x, -self._pan_relative_y)

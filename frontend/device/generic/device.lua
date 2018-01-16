@@ -24,6 +24,8 @@ local Device = {
     isTouchDevice = no,
     hasFrontlight = no,
     needsTouchScreenProbe = no,
+    hasClipboard = no,
+    hasColorScreen = no,
 
     -- use these only as a last resort. We should abstract the functionality
     -- and have device dependent implementations in the corresponting
@@ -55,6 +57,12 @@ function Device:init()
     assert(self ~= nil)
     if not self.screen then
         error("screen/framebuffer must be implemented")
+    end
+
+    self.screen.isColorScreen = self.hasColorScreen
+    self.screen.isColorEnabled = function()
+        if G_reader_settings:has("color_rendering") then return G_reader_settings:isTrue("color_rendering") end
+        return self.screen.isColorScreen()
     end
 
     local is_eink = G_reader_settings:readSetting("eink")
@@ -129,7 +137,7 @@ function Device:onPowerEvent(ev)
         -- always suspend in portrait mode
         self.orig_rotation_mode = self.screen:getRotationMode()
         self.screen:setRotationMode(0)
-        require("ui/screensaver"):show("suspend", _("Sleeping"))
+        require("ui/screensaver"):show()
         self.screen:refreshFull()
         self.screen_saver_mode = true
         UIManager:scheduleIn(0.1, function()
@@ -165,6 +173,12 @@ function Device:reboot() end
 function Device:initNetworkManager() end
 
 function Device:supportsScreensaver() return false end
+
+-- Device specific method to set datetime
+function Device:setDateTime(year, month, day, hour, min, sec) end
+
+-- Device specific method if any setting needs being saved
+function Device:saveSettings() end
 
 --[[
 prepare for application shutdown

@@ -6,8 +6,8 @@ Example:
 
     local frame
     frame = FrameContainer:new{
-        radius = 8,
-        bordersize = 3,
+        radius = Size.radius.window,
+        bordersize = Size.border.window,
         padding = 0,
         margin = 0,
         background = Blitbuffer.COLOR_WHITE,
@@ -18,17 +18,22 @@ Example:
 
 --]]
 
-local WidgetContainer = require("ui/widget/container/widgetcontainer")
-local Geom = require("ui/geometry")
 local Blitbuffer = require("ffi/blitbuffer")
+local Geom = require("ui/geometry")
+local Size = require("ui/size")
+local WidgetContainer = require("ui/widget/container/widgetcontainer")
 
 local FrameContainer = WidgetContainer:new{
     background = nil,
     color = Blitbuffer.COLOR_BLACK,
     margin = 0,
     radius = 0,
-    bordersize = 2,
-    padding = 5,
+    bordersize = Size.border.window,
+    padding = Size.padding.default,
+    padding_top = nil,
+    padding_right = nil,
+    padding_bottom = nil,
+    padding_left = nil,
     width = nil,
     height = nil,
     invert = false,
@@ -36,9 +41,13 @@ local FrameContainer = WidgetContainer:new{
 
 function FrameContainer:getSize()
     local content_size = self[1]:getSize()
+    self._padding_top = self.padding_top or self.padding
+    self._padding_right = self.padding_right or self.padding
+    self._padding_bottom = self.padding_bottom or self.padding
+    self._padding_left = self.padding_left or self.padding
     return Geom:new{
-        w = content_size.w + ( self.margin + self.bordersize + self.padding ) * 2,
-        h = content_size.h + ( self.margin + self.bordersize + self.padding ) * 2
+        w = content_size.w + ( self.margin + self.bordersize ) * 2 + self._padding_left + self._padding_right,
+        h = content_size.h + ( self.margin + self.bordersize ) * 2 + self._padding_top + self._padding_bottom
     }
 end
 
@@ -66,8 +75,8 @@ function FrameContainer:paintTo(bb, x, y)
     end
     if self[1] then
         self[1]:paintTo(bb,
-            x + self.margin + self.bordersize + self.padding,
-            y + self.margin + self.bordersize + self.padding)
+            x + self.margin + self.bordersize + self._padding_left,
+            y + self.margin + self.bordersize + self._padding_top)
     end
     if self.invert then
         bb:invertRect(x + self.bordersize, y + self.bordersize,

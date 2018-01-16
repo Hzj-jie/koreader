@@ -18,6 +18,7 @@ local lang_locale = G_reader_settings:readSetting("language")
 if lang_locale then
     _.changeLang(lang_locale)
 end
+local Device = require("device")
 local UIManager = require("ui/uimanager")
 local RenderText = require("ui/rendertext")
 local Font = require("ui/font")
@@ -35,7 +36,6 @@ local TouchMenu = require("ui/widget/touchmenu")
 local DocumentRegistry = require("document/documentregistry")
 local ReaderUI = require("apps/reader/readerui")
 local DEBUG = require("dbg")
-local Device = require("device")
 local Screen = require("device").screen
 local Blitbuffer = require("ffi/blitbuffer")
 local InputText = require("ui/widget/inputtext")
@@ -131,7 +131,7 @@ Background = InputContainer:new{
     },
     -- contains a gray rectangular desktop
     FrameContainer:new{
-        background = 3,
+        background = Blitbuffer.COLOR_GREY,
         bordersize = 0,
         dimen = Screen:getSize(),
         Widget:new{
@@ -172,9 +172,9 @@ Clock = AlphaContainer:new{
 
     FrameContainer:new{
         background = Blitbuffer.COLOR_WHITE,
-        bordersize = 1,
+        bordersize = Screen:scaleBySize(1),
         margin = 0,
-        padding = 1
+        padding = Screen:scaleBySize(1),
     }
 }
 
@@ -206,7 +206,7 @@ end
 -----------------------------------------------------
 Quiz = ConfirmBox:new{
     text = "Tell me the truth, isn't it COOL?!",
-    width = 300,
+    width = Screen:scaleBySize(300),
     ok_text = "Yes, of course.",
     cancel_text = "No, it's ugly.",
     cancel_callback = function()
@@ -242,8 +242,8 @@ menu_items = {
 M = Menu:new{
     title = "Test Menu",
     item_table = menu_items,
-    width = 500,
-    height = 600,
+    width = Screen:scaleBySize(500),
+    height = Screen:scaleBySize(600),
 }
 
 -----------------------------------------------------
@@ -252,7 +252,7 @@ M = Menu:new{
 readerwindow = CenterContainer:new{
     dimen = Screen:getSize(),
     FrameContainer:new{
-        background = 0
+        background = Blitbuffer.COLOR_BLACK,
     }
 }
 reader = ReaderUI:new{
@@ -329,7 +329,7 @@ touch_menu = TouchMenu:new{
 -- input box widget
 -----------------------------------------------------
 local TestInputText = InputText:new{
-    width = 400,
+    width = Screen:scaleBySize(400),
     enter_callback = function() print("Entered") end,
     scroll = false,
     input_type = "number",

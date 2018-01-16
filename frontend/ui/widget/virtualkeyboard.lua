@@ -10,6 +10,7 @@ local HorizontalGroup = require("ui/widget/horizontalgroup")
 local HorizontalSpan = require("ui/widget/horizontalspan")
 local ImageWidget = require("ui/widget/imagewidget")
 local InputContainer = require("ui/widget/container/inputcontainer")
+local Size = require("ui/size")
 local TextWidget = require("ui/widget/textwidget")
 local UIManager = require("ui/uimanager")
 local VerticalGroup = require("ui/widget/verticalgroup")
@@ -27,7 +28,7 @@ local VirtualKey = InputContainer:new{
 
     width = nil,
     height = math.max(Screen:getWidth(), Screen:getHeight())*0.33,
-    bordersize = 2,
+    bordersize = Size.border.default,
     face = Font:getFace("infont"),
 }
 
@@ -43,6 +44,14 @@ function VirtualKey:init()
     elseif self.label == "Backspace" then
         self.callback = function () self.keyboard:delChar() end
         self.hold_callback = function () self.keyboard:clear() end
+    elseif self.label =="←" then
+        self.callback = function() self.keyboard:leftChar() end
+    elseif self.label == "→" then
+        self.callback = function() self.keyboard:rightChar() end
+    elseif self.label == "↑" then
+        self.callback = function() self.keyboard:upLine() end
+    elseif self.label == "↓" then
+        self.callback = function() self.keyboard:downLine() end
     else
         self.callback = function () self.keyboard:addChar(self.key) end
     end
@@ -62,7 +71,7 @@ function VirtualKey:init()
         margin = 0,
         bordersize = self.bordersize,
         background = Blitbuffer.COLOR_WHITE,
-        radius = 5,
+        radius = Size.radius.window,
         padding = 0,
         CenterContainer:new{
             dimen = Geom:new{
@@ -159,13 +168,14 @@ local VirtualKeyboard = InputContainer:new{
 
     width = Screen:scaleBySize(600),
     height = nil,
-    bordersize = Screen:scaleBySize(2),
-    padding = Screen:scaleBySize(2),
-    key_padding = Screen:scaleBySize(6),
+    bordersize = Size.border.default,
+    padding = Size.padding.small,
+    key_padding = Size.padding.default,
 }
 
 local lang_to_keyboard_layout = {
     el = "el_keyboard",
+    fr = "fr_keyboard",
     ja = "ja_keyboard",
     pl = "pl_keyboard",
     pt_BR = "pt_keyboard",
@@ -303,6 +313,22 @@ end
 function VirtualKeyboard:delChar()
     logger.dbg("delete char")
     self.inputbox:delChar()
+end
+
+function VirtualKeyboard:leftChar()
+    self.inputbox:leftChar()
+end
+
+function VirtualKeyboard:rightChar()
+    self.inputbox:rightChar()
+end
+
+function VirtualKeyboard:upLine()
+    self.inputbox:upLine()
+end
+
+function VirtualKeyboard:downLine()
+    self.inputbox:downLine()
 end
 
 function VirtualKeyboard:clear()

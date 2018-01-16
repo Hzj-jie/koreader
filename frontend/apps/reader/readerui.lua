@@ -12,7 +12,6 @@ local DocumentRegistry = require("document/documentregistry")
 local Event = require("ui/event")
 local FileManagerBookInfo = require("apps/filemanager/filemanagerbookinfo")
 local FileManagerHistory = require("apps/filemanager/filemanagerhistory")
-local Geom = require("ui/geometry")
 local InfoMessage = require("ui/widget/infomessage")
 local InputContainer = require("ui/widget/container/inputcontainer")
 local InputDialog = require("ui/widget/inputdialog")
@@ -60,8 +59,6 @@ local ReaderUI = InputContainer:new{
     },
     active_widgets = {},
 
-    -- our own size
-    dimen = Geom:new{ w = 400, h = 600 },
     -- if we have a parent container, it must be referenced for now
     dialog = nil,
 
@@ -266,7 +263,9 @@ function ReaderUI:init()
     else
         -- make sure we render document first before calling any callback
         self:registerPostInitCallback(function()
-            self.document:loadDocument()
+            if not self.document:loadDocument() then
+                self:dealWithLoadDocumentFailure()
+            end
 
             -- used to read additional settings after the document has been
             -- loaded (but not rendered yet)
@@ -352,12 +351,7 @@ function ReaderUI:init()
     -- Now that document is loaded, store book metadata in settings
     -- (so that filemanager can use it from sideCar file to display
     -- Book information).
-    -- via pcall because picdocument:getProps() may fail
-    local ok, doc_props = pcall(self.document.getProps, self.document)
-    if not ok then
-        doc_props = {}
-    end
-    self.doc_settings:saveSetting("doc_props", doc_props)
+    self.doc_settings:saveSetting("doc_props", self.document:getProps())
 
     -- After initialisation notify that document is loaded and rendered
     -- CREngine only reports correct page count after rendering is done
@@ -373,16 +367,16 @@ end
 function ReaderUI:showFileManager()
     local FileManager = require("apps/filemanager/filemanager")
     local QuickStart = require("ui/quickstart")
-    local lastdir
+    local last_dir
     local last_file = G_reader_settings:readSetting("lastfile")
     -- ignore quickstart guide as last_file so we can go back to home dir
     if last_file and last_file ~= QuickStart.quickstart_filename then
-        lastdir = last_file:match("(.*)/")
+        last_dir = last_file:match("(.*)/")
     end
     if FileManager.instance then
-        FileManager.instance:reinit(lastdir)
+        FileManager.instance:reinit(last_dir, last_file)
     else
-        FileManager:showFiles(lastdir)
+        FileManager:showFiles(last_dir, last_file)
     end
 end
 
@@ -534,8 +528,8 @@ function ReaderUI:notifyCloseDocument()
         else
             UIManager:show(ConfirmBox:new{
                 text = _("Do you want to save this document?"),
-                ok_text = _("Yes"),
-                cancel_text = _("No"),
+                ok_text = _("Save"),
+                cancel_text = _("Don't save"),
                 ok_callback = function()
                     self:closeDocument()
                 end,
@@ -552,7 +546,11 @@ end
 
 function ReaderUI:onClose()
     logger.dbg("closing reader")
-    self:saveSettings()
+    -- if self.dialog is us, we'll have our onFlushSettings() called
+    -- by UIManager:close() below, so avoid double save
+    if self.dialog ~= self then
+        self:saveSettings()
+    end
     if self.document ~= nil then
         logger.dbg("closing document")
         self:notifyCloseDocument()
@@ -563,6 +561,36 @@ function ReaderUI:onClose()
     if _running_instance == self then
         _running_instance = nil
     end
+end
+
+function ReaderUI:dealWithLoadDocumentFailure()
+    -- Sadly, we had to delay loadDocument() to about now, so we only
+    -- know now this document is not valid or recognized.
+    -- We can't do much more than crash properly here (still better than
+    -- going on and segfaulting when calling other methods on unitiliazed
+    -- _document)
+    -- We must still remove it from lastfile and history (as it has
+    -- already been added there) so that koreader don't crash again
+    -- at next launch...
+    local readhistory = require("readhistory")
+    readhistory:removeItemByPath(self.document.file)
+    if G_reader_settings:readSetting("lastfile") == self.document.file then
+        G_reader_settings:saveSetting("lastfile", #readhistory.hist > 0 and readhistory.hist[1].file or nil)
+    end
+    -- As we are in a coroutine, we can pause and show an InfoMessage before exiting
+    local _coroutine = coroutine.running()
+    if coroutine then
+        logger.warn("crengine failed recognizing or parsing this file: unsupported or invalid document")
+        UIManager:show(InfoMessage:new{
+            text = _("Failed recognizing or parsing this file: unsupported or invalid document.\nKOReader will exit now."),
+            dismiss_callback = function()
+                coroutine.resume(_coroutine, false)
+            end,
+        })
+        coroutine.yield() -- pause till InfoMessage is dismissed
+    end
+    -- We have to error and exit the coroutine anyway to avoid any segfault
+    error("crengine failed recognizing or parsing this file: unsupported or invalid document")
 end
 
 return ReaderUI

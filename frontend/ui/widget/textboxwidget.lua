@@ -16,11 +16,12 @@ local Blitbuffer = require("ffi/blitbuffer")
 local Geom = require("ui/geometry")
 local LineWidget = require("ui/widget/linewidget")
 local RenderText = require("ui/rendertext")
-local Screen = require("device").screen
+local Size = require("ui/size")
 local TimeVal = require("ui/timeval")
 local Widget = require("ui/widget/widget")
 local logger = require("logger")
 local util = require("util")
+local Screen = require("device").screen
 
 local TextBoxWidget = Widget:new{
     text = nil,
@@ -35,7 +36,7 @@ local TextBoxWidget = Widget:new{
     bold = nil,
     line_height = 0.3, -- in em
     fgcolor = Blitbuffer.COLOR_BLACK,
-    width = 400, -- in pixels
+    width = Screen:scaleBySize(400), -- in pixels
     height = nil, -- nil value indicates unscrollable text widget
     virtual_line_num = 1, -- used by scroll bar
     _bb = nil,
@@ -45,7 +46,7 @@ function TextBoxWidget:init()
     self.line_height_px = (1 + self.line_height) * self.face.size
     self.cursor_line = LineWidget:new{
         dimen = Geom:new{
-            w = Screen:scaleBySize(1),
+            w = Size.line.medium,
             h = self.line_height_px,
         }
     }
@@ -138,6 +139,9 @@ function TextBoxWidget:_splitCharWidthList()
                 -- either a very long english word ocuppying more than one line,
                 -- or the excessive char is itself splittable:
                 -- we let that excessive char for next line
+                if adjusted_idx == offset then -- let the fact a long word was splitted be known
+                    self.has_split_inside_word = true
+                end
                 cur_line_text = table.concat(self.charlist, "", offset, idx - 1)
                 cur_line_width = cur_line_width - self.char_width_list[idx].width
             elseif c == " " then
@@ -278,6 +282,7 @@ end
 -- Click event: Move the cursor to a new location with (x, y), in pixels.
 -- Be aware of virtual line number of the scorllTextWidget.
 function TextBoxWidget:moveCursor(x, y)
+    if x < 0 or y < 0 then return end
     if #self.vertical_string_list == 0 then
         -- if there's no text at all, nothing to do
         return 1
@@ -350,6 +355,26 @@ function TextBoxWidget:getSize()
         return Geom:new{ w = self.width, h = self.height}
     else
         return Geom:new{ w = self.width, h = self._bb:getHeight()}
+    end
+end
+
+function TextBoxWidget:moveCursorUp()
+    if self.vertical_string_list and #self.vertical_string_list < 2 then return end
+    local x, y
+    x, y = self:_findCharPos()
+    local charpos = self:moveCursor(x, y - self.line_height_px +1)
+    if charpos then
+        self:moveCursorToCharpos(charpos)
+    end
+end
+
+function TextBoxWidget:moveCursorDown()
+    if self.vertical_string_list and #self.vertical_string_list < 2 then return end
+    local x, y
+    x, y = self:_findCharPos()
+    local charpos = self:moveCursor(x, y + self.line_height_px +1)
+    if charpos then
+        self:moveCursorToCharpos(charpos)
     end
 end
 

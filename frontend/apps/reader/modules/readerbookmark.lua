@@ -1,19 +1,23 @@
 local CenterContainer = require("ui/widget/container/centercontainer")
+local ConfirmBox = require("ui/widget/confirmbox")
 local Device = require("device")
 local Event = require("ui/event")
 local Font = require("ui/font")
 local Geom = require("ui/geometry")
 local GestureRange = require("ui/gesturerange")
 local InputContainer = require("ui/widget/container/inputcontainer")
+local InputDialog = require("ui/widget/inputdialog")
 local Menu = require("ui/widget/menu")
 local TextViewer = require("ui/widget/textviewer")
 local UIManager = require("ui/uimanager")
 local logger = require("logger")
 local _ = require("gettext")
 local Screen = require("device").screen
+local T = require("ffi/util").template
 
 local ReaderBookmark = InputContainer:new{
     bm_menu_title = _("Bookmarks"),
+    bbm_menu_title = _("Bookmark browsing mode"),
     bookmarks = nil,
 }
 
@@ -51,6 +55,20 @@ function ReaderBookmark:addToMainMenu(menu_items)
             self:onShowBookmark()
         end,
     }
+    if self.ui.document.info.has_pages then
+        menu_items.bookmark_browsing_mode = {
+            text = self.bbm_menu_title,
+            checked_func = function() return self.view.flipping_visible end,
+            callback = function(touchmenu_instance)
+                self:enableBookmarkBrowsingMode()
+                touchmenu_instance:closeMenu()
+            end,
+        }
+    end
+end
+
+function ReaderBookmark:enableBookmarkBrowsingMode()
+    self.ui:handleEvent(Event:new("ToggleBookmarkFlipping"))
 end
 
 function ReaderBookmark:isBookmarkInTimeOrder(a, b)
@@ -72,6 +90,22 @@ function ReaderBookmark:isBookmarkInReversePageOrder(a, b)
     else
         return self.ui.document:getPageFromXPointer(a.page) <
                 self.ui.document:getPageFromXPointer(b.page)
+    end
+end
+
+function ReaderBookmark:isBookmarkPageInPageOrder(a, b)
+    if self.ui.document.info.has_pages then
+        return a > b.page
+    else
+        return a > self.ui.document:getPageFromXPointer(b.page)
+    end
+end
+
+function ReaderBookmark:isBookmarkPageInReversePageOrder(a, b)
+    if self.ui.document.info.has_pages then
+        return a < b.page
+    else
+        return a < self.ui.document:getPageFromXPointer(b.page)
     end
 end
 
@@ -171,7 +205,9 @@ function ReaderBookmark:onShowBookmark()
         if not self.ui.document.info.has_pages then
             page = self.ui.document:getPageFromXPointer(page)
         end
-        v.text = _("Page") .. " " .. page .. " " .. v.notes .. " @ " .. v.datetime
+        if v.text == nil or v.text == "" then
+            v.text = T(_("Page %1 %2 @ %3"), page, v.notes, v.datetime)
+        end
     end
 
     local bm_menu = Menu:new{
@@ -182,6 +218,8 @@ function ReaderBookmark:onShowBookmark()
         width = Screen:getWidth(),
         height = Screen:getHeight(),
         cface = Font:getFace("x_smallinfofont"),
+        perpage = G_reader_settings:readSetting("items_per_page") or 14,
+        line_color = require("ffi/blitbuffer").COLOR_WHITE,
         on_close_ges = {
             GestureRange:new{
                 ges = "two_finger_swipe",
@@ -215,20 +253,40 @@ function ReaderBookmark:onShowBookmark()
             buttons_table = {
                 {
                     {
-                        text = _("Close"),
+                        text = _("Rename this bookmark"),
                         callback = function()
+                            bookmark:renameBookmark(item)
                             UIManager:close(self.textviewer)
                         end,
                     },
                     {
                         text = _("Remove this bookmark"),
                         callback = function()
-                            bookmark:removeHightligit(item)
-                            bm_menu:switchItemTable(nil, bookmark.bookmarks, -1)
-                            UIManager:close(self.textviewer)
+                            UIManager:show(ConfirmBox:new{
+                                text = _("Do you want remove this bookmark?"),
+                                cancel_text = _("Cancel"),
+                                cancel_callback = function()
+                                    return
+                                end,
+                                ok_text = _("Remove"),
+                                ok_callback = function()
+                                    bookmark:removeHighlight(item)
+                                    bm_menu:switchItemTable(nil, bookmark.bookmarks, -1)
+                                    UIManager:close(self.textviewer)
+                                end,
+                            })
                         end,
                     },
                 },
+                {
+                    {
+                        text = _("Close"),
+                        is_enter_default = true,
+                        callback = function()
+                            UIManager:close(self.textviewer)
+                        end,
+                    },
+                }
             }
         }
         UIManager:show(self.textviewer)
@@ -240,6 +298,10 @@ function ReaderBookmark:onShowBookmark()
     end
 
     bm_menu.show_parent = self.bookmark_menu
+    self.refresh = function()
+        bm_menu:updateItems()
+        self:onSaveSettings()
+    end
 
     UIManager:show(self.bookmark_menu)
     return true
@@ -324,7 +386,7 @@ function ReaderBookmark:isBookmarkAdded(item)
     return false
 end
 
-function ReaderBookmark:removeHightligit(item)
+function ReaderBookmark:removeHighlight(item)
     if item.pos0 then
         self.ui:handleEvent(Event:new("Unhighlight", item))
     else
@@ -347,6 +409,79 @@ function ReaderBookmark:removeBookmark(item)
             _start = _middle + 1
         end
     end
+    -- If we haven't found item, it may be because there are multiple
+    -- bookmarks on the same page, and the above binary search decided to
+    -- not search on one side of one it found on page, where item could be.
+    -- Fallback to do a full scan.
+    logger.dbg("removeBookmark: binary search didn't find bookmark, doing full scan")
+    for i=1, #self.bookmarks do
+        local v = self.bookmarks[i]
+        if item.datetime == v.datetime and item.page == v.page then
+            return table.remove(self.bookmarks, i)
+        end
+    end
+    logger.warn("removeBookmark: full scan search didn't find bookmark")
+end
+
+function ReaderBookmark:renameBookmark(item, from_highlight)
+    if from_highlight then
+        -- Called by ReaderHighlight:editHighlight, we need to find the bookmark
+        for i=1, #self.bookmarks do
+            if item.datetime == self.bookmarks[i].datetime and item.page == self.bookmarks[i].page then
+                item = self.bookmarks[i]
+                if item.text == nil or item.text == "" then
+                    -- Make up bookmark text as done in onShowBookmark
+                    local page = item.page
+                    if not self.ui.document.info.has_pages then
+                        page = self.ui.document:getPageFromXPointer(page)
+                    end
+                    item.text = T(_("Page %1 %2 @ %3"), page, item.notes, item.datetime)
+                end
+                break
+            end
+        end
+        if item.text == nil then -- bookmark not found
+            return
+        end
+    end
+    self.input = InputDialog:new{
+        title = _("Rename bookmark"),
+        input = item.text,
+        input_type = "text",
+        buttons = {
+            {
+                {
+                    text = _("Cancel"),
+                    is_enter_default = true,
+                    callback = function()
+                        UIManager:close(self.input)
+                    end,
+                },
+                {
+                    text = _("Rename"),
+                    callback = function()
+                        local value = self.input:getInputValue()
+                        if value ~= "" then
+                            for i=1, #self.bookmarks do
+                                if item.text == self.bookmarks[i].text and  item.pos0 == self.bookmarks[i].pos0 and
+                                    item.pos1 == self.bookmarks[i].pos1 and item.page == self.bookmarks[i].page then
+                                    self.bookmarks[i].text = value
+                                    UIManager:close(self.input)
+                                    if not from_highlight then
+                                        self.refresh()
+                                    end
+                                    break
+                                end
+                            end
+                        end
+                        UIManager:close(self.input)
+                    end,
+                },
+            }
+        },
+    }
+    self.input:onShowKeyboard()
+    UIManager:show(self.input)
 end
 
 function ReaderBookmark:toggleBookmark(pn_or_xp)
@@ -385,6 +520,24 @@ function ReaderBookmark:getNextBookmarkedPage(pn_or_xp)
     end
 end
 
+function ReaderBookmark:getPreviousBookmarkedPageFromPage(pn_or_xp)
+    logger.dbg("go to next bookmark from", pn_or_xp)
+    for i = 1, #self.bookmarks do
+        if self:isBookmarkPageInPageOrder(pn_or_xp, self.bookmarks[i]) then
+            return self.bookmarks[i].page
+        end
+    end
+end
+
+function ReaderBookmark:getNextBookmarkedPageFromPage(pn_or_xp)
+    logger.dbg("go to next bookmark from", pn_or_xp)
+    for i = #self.bookmarks, 1, -1 do
+        if self:isBookmarkPageInReversePageOrder(pn_or_xp, self.bookmarks[i]) then
+            return self.bookmarks[i].page
+        end
+    end
+end
+
 function ReaderBookmark:onGotoPreviousBookmark(pn_or_xp)
     self:gotoBookmark(self:getPreviousBookmarkedPage(pn_or_xp))
     return true
@@ -393,6 +546,18 @@ end
 function ReaderBookmark:onGotoNextBookmark(pn_or_xp)
     self:gotoBookmark(self:getNextBookmarkedPage(pn_or_xp))
     return true
+end
+
+function ReaderBookmark:getLatestBookmark()
+    local latest_bookmark = nil
+    local latest_bookmark_datetime = "0"
+    for i = 1, #self.bookmarks do
+        if self.bookmarks[i].datetime > latest_bookmark_datetime then
+            latest_bookmark_datetime = self.bookmarks[i].datetime
+            latest_bookmark = self.bookmarks[i]
+        end
+    end
+    return latest_bookmark
 end
 
 return ReaderBookmark

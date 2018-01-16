@@ -35,11 +35,13 @@ local LeftContainer = require("ui/widget/container/leftcontainer")
 local LineWidget = require("ui/widget/linewidget")
 local OverlapGroup = require("ui/widget/overlapgroup")
 local RenderText = require("ui/rendertext")
+local Size = require("ui/size")
 local TextViewer = require("ui/widget/textviewer")
 local TextWidget = require("ui/widget/textwidget")
 local UIManager = require("ui/uimanager")
 local VerticalGroup = require("ui/widget/verticalgroup")
 local VerticalSpan = require("ui/widget/verticalspan")
+local Input = Device.input
 local Screen = Device.screen
 local T = require("ffi/util").template
 local _ = require("gettext")
@@ -49,6 +51,7 @@ local KeyValueTitle = VerticalGroup:new{
     title = "",
     tface = Font:getFace("tfont"),
     align = "left",
+    use_top_page_count = false,
 }
 
 function KeyValueTitle:init()
@@ -73,30 +76,32 @@ function KeyValueTitle:init()
         self.close_button,
     })
     -- page count and separation line
-    self.page_cnt = FrameContainer:new{
-        padding = 4,
-        margin = 0,
-        bordersize = 0,
-        background = Blitbuffer.COLOR_WHITE,
-        -- overlap offset x will be updated in setPageCount method
-        overlap_offset = {0, -15},
-        TextWidget:new{
-            text = "",  -- page count
-            fgcolor = Blitbuffer.COLOR_GREY,
-            face = Font:getFace("smallffont"),
-        },
-    }
     self.title_bottom = OverlapGroup:new{
-        dimen = { w = self.width, h = Screen:scaleBySize(2) },
+        dimen = { w = self.width, h = Size.line.thick },
         LineWidget:new{
-            dimen = Geom:new{ w = self.width, h = Screen:scaleBySize(2) },
+            dimen = Geom:new{ w = self.width, h = Size.line.thick },
             background = Blitbuffer.COLOR_GREY,
             style = "solid",
         },
-        self.page_cnt,
     }
+    if self.use_top_page_count then
+        self.page_cnt = FrameContainer:new{
+            padding = Size.padding.default,
+            margin = 0,
+            bordersize = 0,
+            background = Blitbuffer.COLOR_WHITE,
+            -- overlap offset x will be updated in setPageCount method
+            overlap_offset = {0, -15},
+            TextWidget:new{
+                text = "",  -- page count
+                fgcolor = Blitbuffer.COLOR_GREY,
+                face = Font:getFace("smallffont"),
+            },
+        }
+        table.insert(self.title_bottom, self.page_cnt)
+    end
     table.insert(self, self.title_bottom)
-    table.insert(self, VerticalSpan:new{ width = Screen:scaleBySize(5) })
+    table.insert(self, VerticalSpan:new{ width = Size.span.vertical_large })
 end
 
 function KeyValueTitle:setPageCount(curr, total)
@@ -125,6 +130,7 @@ local KeyValueItem = InputContainer:new{
     height = nil,
     textviewer_width = nil,
     textviewer_height = nil,
+    value_overflow_align = "left",
 }
 
 function KeyValueItem:init()
@@ -139,7 +145,7 @@ function KeyValueItem:init()
         }
     end
 
-    local frame_padding = Screen:scaleBySize(8)
+    local frame_padding = Size.padding.default
     local frame_internal_width = self.width - frame_padding * 2
     local key_w = frame_internal_width / 2
     local value_w = frame_internal_width / 2
@@ -155,7 +161,8 @@ function KeyValueItem:init()
                 self.show_value = self.value
             else
                 key_w = key_w_rendered + space_w_rendered
-                self.show_value = RenderText:truncateTextByWidth(self.value, self.cface, frame_internal_width - key_w_rendered, true)
+                self.show_value = RenderText:truncateTextByWidth(self.value, self.cface, frame_internal_width - key_w_rendered,
+                    false, false, true)
                 self.show_key = self.key
             end
             -- allow for displaying the non-truncated texts with Hold
@@ -169,11 +176,18 @@ function KeyValueItem:init()
             end
         -- misalign to fit all info
         else
-            key_w = key_w_rendered + space_w_rendered
+            if self.value_overflow_align == "right" or self.value_align == "right" then
+                key_w = frame_internal_width - value_w_rendered
+            else
+                key_w = key_w_rendered + space_w_rendered
+            end
             self.show_key = self.key
             self.show_value = self.value
         end
     else
+        if self.value_align == "right" then
+            key_w = frame_internal_width - value_w_rendered
+        end
         self.show_key = self.key
         self.show_value = self.value
     end
@@ -208,7 +222,23 @@ function KeyValueItem:init()
 end
 
 function KeyValueItem:onTap()
-    self.callback()
+    if self.callback then
+        if G_reader_settings:isFalse("flash_ui") then
+            self.callback()
+        else
+            self[1].invert = true
+            UIManager:setDirty(self.show_parent, function()
+                return "ui", self[1].dimen
+            end)
+            UIManager:scheduleIn(0.1, function()
+                self.callback()
+                self[1].invert = false
+                UIManager:setDirty(self.show_parent, function()
+                    return "ui", self[1].dimen
+                end)
+            end)
+        end
+    end
     return true
 end
 
@@ -230,6 +260,10 @@ local KeyValuePage = InputContainer:new{
     height = nil,
     -- index for the first item to show
     show_page = 1,
+    use_top_page_count = false,
+    -- aligment of value when key or value overflows its reserved width (for
+    -- now: 50%): "left" (stick to key), "right" (stick to scren right border)
+    value_overflow_align = "left",
 }
 
 function KeyValuePage:init()
@@ -241,6 +275,8 @@ function KeyValuePage:init()
     if Device:hasKeys() then
         self.key_events = {
             Close = { {"Back"}, doc = "close page" },
+            NextPage = {{Input.group.PgFwd}, doc = "next page"},
+            PrevPage = {{Input.group.PgBack}, doc = "prev page"},
         }
     end
     if Device:isTouchDevice() then
@@ -252,6 +288,13 @@ function KeyValuePage:init()
         }
     end
 
+    -- return button
+    self.page_return_arrow = Button:new{
+        icon = "resources/icons/appbar.arrow.left.up.png",
+        callback = function() self:onReturn() end,
+        bordersize = 0,
+        show_parent = self,
+    }
     -- group for page info
     self.page_info_left_chev = Button:new{
         icon = "resources/icons/appbar.chevron.left.png",
@@ -280,6 +323,16 @@ function KeyValuePage:init()
     self.page_info_spacer = HorizontalSpan:new{
         width = Screen:scaleBySize(32),
     }
+    self.page_return_spacer = HorizontalSpan:new{
+        width = self.page_return_arrow:getSize().w
+    }
+
+    if self.callback_return == nil and self.return_button == nil then
+        self.page_return_arrow:hide()
+    elseif self.callback_return == nil then
+        self.page_return_arrow:disable()
+    end
+
     self.page_info_left_chev:hide()
     self.page_info_right_chev:hide()
     self.page_info_first_chev:hide()
@@ -306,6 +359,7 @@ function KeyValuePage:init()
         text_font_bold = false,
     }
     self.page_info = HorizontalGroup:new{
+        self.page_return_arrow,
         self.page_info_first_chev,
         self.page_info_spacer,
         self.page_info_left_chev,
@@ -313,6 +367,7 @@ function KeyValuePage:init()
         self.page_info_right_chev,
         self.page_info_spacer,
         self.page_info_last_chev,
+        self.page_return_spacer,
     }
 
     local footer = BottomContainer:new{
@@ -320,14 +375,15 @@ function KeyValuePage:init()
         self.page_info,
     }
 
-    local padding = Screen:scaleBySize(10)
+    local padding = Size.padding.large
     self.item_width = self.dimen.w - 2 * padding
-    self.item_height = Screen:scaleBySize(30)
+    self.item_height = Size.item.height_default
     -- setup title bar
     self.title_bar = KeyValueTitle:new{
         title = self.title,
         width = self.item_width,
         height = self.item_height,
+        use_top_page_count = self.use_top_page_count,
         kv_page = self,
     }
     -- setup main content
@@ -404,8 +460,12 @@ function KeyValuePage:_populateItems()
                     key = entry[1],
                     value = entry[2],
                     callback = entry.callback,
+                    callback_back = entry.callback_back,
                     textviewer_width = self.textviewer_width,
                     textviewer_height = self.textviewer_height,
+                    value_overflow_align = self.value_overflow_align,
+                    value_align = self.value_align,
+                    show_parent = self,
                 }
             )
         elseif type(entry) == "string" then
@@ -417,7 +477,7 @@ function KeyValuePage:_populateItems()
                     background = Blitbuffer.COLOR_LIGHT_GREY,
                     dimen = Geom:new{
                         w = self.item_width,
-                        h = Screen:scaleBySize(2)
+                        h = Size.line.thick
                     },
                     style = "solid",
                 })
@@ -442,6 +502,16 @@ function KeyValuePage:_populateItems()
     end)
 end
 
+function KeyValuePage:onNextPage()
+    self:nextPage()
+    return true
+end
+
+function KeyValuePage:onPrevPage()
+    self:prevPage()
+    return true
+end
+
 function KeyValuePage:onSwipe(arg, ges_ev)
     if ges_ev.direction == "west" then
         self:nextPage()
@@ -461,6 +531,14 @@ end
 function KeyValuePage:onClose()
     UIManager:close(self)
     return true
+end
+
+function KeyValuePage:onReturn()
+    if self.callback_return then
+        self:callback_return()
+        UIManager:close(self)
+        UIManager:setDirty("all", "ui")
+    end
 end
 
 return KeyValuePage

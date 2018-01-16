@@ -1,6 +1,7 @@
-local KoptOptions = require("ui/data/koptoptions")
+local Blitbuffer = require("ffi/blitbuffer")
 local Document = require("document/document")
 local DrawContext = require("ffi/drawcontext")
+local KoptOptions = require("ui/data/koptoptions")
 
 local DjvuDocument = Document:new{
     _document = false,
@@ -10,6 +11,7 @@ local DjvuDocument = Document:new{
     dc_null = DrawContext.new(),
     options = KoptOptions,
     koptinterface = nil,
+    color_bb_type = Blitbuffer.TYPE_BBRGB24,
 }
 
 -- check DjVu magic string to validate
@@ -23,6 +25,7 @@ local function validDjvuFile(filename)
 end
 
 function DjvuDocument:init()
+    self:updateColorRendering()
     local djvu = require("libs/libkoreader-djvu")
     self.koptinterface = require("document/koptinterface")
     self.configurable:loadDefaults(self.options)
@@ -31,7 +34,7 @@ function DjvuDocument:init()
     end
 
     local ok
-    ok, self._document = pcall(djvu.openDocument, self.file, self.djvulibre_cache_size)
+    ok, self._document = pcall(djvu.openDocument, self.file, self.render_color, self.djvulibre_cache_size)
     if not ok then
         error(self._document)  -- will contain error message
     end
@@ -39,6 +42,13 @@ function DjvuDocument:init()
     self.info.has_pages = true
     self.info.configurable = true
     self:_readMetadata()
+end
+
+function DjvuDocument:updateColorRendering()
+    Document.updateColorRendering(self) -- will set self.render_color
+    if self._document then
+        self._document:setColorRendering(self.render_color)
+    end
 end
 
 function DjvuDocument:getProps()

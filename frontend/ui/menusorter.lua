@@ -34,9 +34,7 @@ function MenuSorter:mergeAndSort(config_prefix, item_table, order)
     local user_order = self:readMSSettings(config_prefix)
     if user_order then
         for user_order_id,user_order_item in pairs(user_order) do
-            if order[user_order_id] then
-                order[user_order_id] = user_order_item
-            end
+            order[user_order_id] = user_order_item
         end
     end
     return self:sort(item_table, order)
@@ -86,7 +84,10 @@ function MenuSorter:sort(item_table, order)
                 if v then
                     if v.id == separator_id then
                         new_index = new_index - 1
-                        menu_table[order_id][new_index].separator = true
+                        -- ignore separator if the menu starts with it
+                        if new_index > 0 then
+                            menu_table[order_id][new_index].separator = true
+                        end
                     else
                         -- fix the index
                         menu_table[order_id][new_index] = tmp_menu_table[i]
@@ -118,6 +119,7 @@ function MenuSorter:sort(item_table, order)
                     changed = true
                     local sub_menu_content = menu_table[sub_menu]
                     sub_menu_position.text = sub_menu_content.text
+                    sub_menu_position.hold_callback = sub_menu_content.hold_callback
                     sub_menu_position.sub_item_table = sub_menu_content
                     -- remove reference from top level output
                     menu_table[sub_menu] = nil
@@ -153,6 +155,13 @@ function MenuSorter:sort(item_table, order)
             v.text = self.orphaned_prefix .. v.text
             -- prevent text being prepended to item on menu reload, i.e., on switching between reader and filemanager
             v.new = true
+            -- deal with orphaned submenus
+            if #v > 0 then
+                v.sub_item_table = {}
+                for i=1,#v do
+                    v.sub_item_table[i] = v[i]
+                end
+            end
         end
         table.insert(menu_table["KOMenu:menu_buttons"][1], v)
     end

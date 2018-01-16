@@ -1,3 +1,5 @@
+local Button = require("ui/widget/button")
+local ButtonProgressWidget = require("ui/widget/buttonprogresswidget")
 local Blitbuffer = require("ffi/blitbuffer")
 local BottomContainer = require("ui/widget/container/bottomcontainer")
 local CenterContainer = require("ui/widget/container/centercontainer")
@@ -14,7 +16,10 @@ local HorizontalSpan = require("ui/widget/horizontalspan")
 local IconButton = require("ui/widget/iconbutton")
 local ImageWidget = require("ui/widget/imagewidget")
 local InputContainer = require("ui/widget/container/inputcontainer")
+local LineWidget = require("ui/widget/linewidget")
+local RenderText = require("ui/rendertext")
 local RightContainer = require("ui/widget/container/rightcontainer")
+local Size = require("ui/size")
 local TextWidget = require("ui/widget/textwidget")
 local ToggleSwitch = require("ui/widget/toggleswitch")
 local UIManager = require("ui/uimanager")
@@ -142,26 +147,31 @@ function ConfigOption:init()
     -- make default styles
     local default_name_font_size = 20
     local default_item_font_size = 16
-    local default_items_spacing = 30
+    local default_items_spacing = 40
     local default_option_height = 50
-    local default_option_padding = 15
+    local default_option_padding = Size.padding.large
     local max_option_name_width = 0
+    local txt_width = 0
+    local padding_small = Size.padding.small
+    local padding_button = Size.padding.button
     for c = 1, #self.options do
         local name_font_face = self.options[c].name_font_face and self.options[c].name_font_face or "cfont"
         local name_font_size = self.options[c].name_font_size and self.options[c].name_font_size or default_name_font_size
-        local option_name_width = TextWidget:new{
-            text = self.options[c].name_text,
-            face = Font:getFace(name_font_face, name_font_size),
-        }:getSize().w
-        max_option_name_width = math.max(max_option_name_width, option_name_width)
+        local text = self.options[c].name_text
+        local face = Font:getFace(name_font_face, name_font_size)
+        if text ~= nil then
+            txt_width = RenderText:sizeUtf8Text(0, Screen:getWidth(), face, text).x
+        end
+        max_option_name_width = math.max(max_option_name_width, txt_width)
     end
-    local default_name_align_right = math.max((max_option_name_width + Screen:scaleByDPI(10))/Screen:getWidth(), 0.33)
+    local default_name_align_right = math.max((max_option_name_width + Screen:scaleBySize(10))/Screen:getWidth(), 0.33)
+    default_name_align_right = math.min(default_name_align_right, 0.5)
     local default_item_align_center = 1 - default_name_align_right
 
     -- fill vertical group of config tab
     local vertical_group = VerticalGroup:new{}
     table.insert(vertical_group, VerticalSpan:new{
-        width = Screen:scaleBySize(default_option_padding),
+        width = default_option_padding,
     })
     -- @TODO restore setting when there are more advanced settings
     --local show_advanced = G_reader_settings:readSetting("show_advanced") or false
@@ -175,21 +185,42 @@ function ConfigOption:init()
             local name_font_size = self.options[c].name_font_size and self.options[c].name_font_size or default_name_font_size
             local item_font_face = self.options[c].item_font_face and self.options[c].item_font_face or "cfont"
             local item_font_size = self.options[c].item_font_size and self.options[c].item_font_size or default_item_font_size
-            local option_height = Screen:scaleBySize(self.options[c].height and self.options[c].height or default_option_height)
-            local item_spacing_with = self.options[c].spacing and self.options[c].spacing or default_items_spacing
+            local option_height = Screen:scaleBySize(self.options[c].height and self.options[c].height or
+                    default_option_height + (self.options[c].height or 30) * ((self.options[c].row_count or 1) -1))
+            local item_spacing_width = Screen:scaleBySize(self.options[c].spacing and self.options[c].spacing or default_items_spacing)
             local enabled = true
+            if item_align == 1.0 then
+                name_align = 0
+            end
+            if name_align + item_align > 1 then
+                name_align = 0.5
+                item_align = 0.5
+            end
             if self.options[c].enabled_func then
                 enabled = self.options[c].enabled_func(self.config.configurable)
             end
             local horizontal_group = HorizontalGroup:new{}
             if self.options[c].name_text then
+                local text = self.options[c].name_text
+                local face = Font:getFace(name_font_face, name_font_size)
+                local width_name_text = RenderText:sizeUtf8Text(0, Screen:getWidth(), face, text).x
+                if math.floor(name_align * Screen:getWidth()) - 2*padding_small < width_name_text then
+                    text = RenderText:truncateTextByWidth(text, face, name_align * Screen:getWidth() - 2*padding_small)
+                end
+
                 local option_name_container = RightContainer:new{
                     dimen = Geom:new{ w = Screen:getWidth()*name_align, h = option_height},
                 }
-                local option_name = TextWidget:new{
-                    text = self.options[c].name_text,
-                    face = Font:getFace(name_font_face, name_font_size),
-                    fgcolor = Blitbuffer.gray(enabled and 1.0 or 0.5),
+                local option_name = Button:new{
+                    text = text,
+                    bordersize = 0,
+                    face = face,
+                    enabled = enabled,
+                    padding = padding_small,
+                    text_font_face = name_font_face,
+                    text_font_size = name_font_size,
+                    text_font_bold = false,
+                    hold_callback = self.options[c].name_text_hold_callback,
                 }
                 table.insert(option_name_container, option_name)
                 table.insert(horizontal_group, option_name_container)
@@ -259,20 +290,28 @@ function ConfigOption:init()
             end
             if self.options[c].item_text then
                 local items_count = #self.options[c].item_text
-                local middle_index = math.ceil(items_count/2)
-                local middle_item = OptionTextItem:new{
-                    TextWidget:new{
-                        text = self.options[c].item_text[middle_index],
-                        face = Font:getFace(item_font_face,
-                            option_items_fixed and item_font_size[middle_index]
+                local items_width = 0
+                for d = 1, #self.options[c].item_text do
+                    local item = OptionTextItem:new{
+                        TextWidget:new{
+                            text = self.options[c].item_text[d],
+                            face = Font:getFace(item_font_face,
+                            option_items_fixed and item_font_size[d]
                             or item_font_size),
+                        }
                     }
-                }
-                local max_item_spacing = (Screen:getWidth() * item_align -
-                        middle_item:getSize().w * items_count) / items_count
+                    items_width = items_width + item:getSize().w
+                end
+                local max_item_spacing = (Screen:getWidth() * item_align - items_width) / items_count
+                local width = math.min(max_item_spacing, item_spacing_width)
+
+                if max_item_spacing < item_spacing_width / 2 then
+                    width = item_spacing_width / 2
+                end
                 local items_spacing = HorizontalSpan:new{
-                    width = math.min(max_item_spacing, Screen:scaleBySize(item_spacing_with))
+                    width = width
                 }
+                local max_item_text_width = (Screen:getWidth() * item_align - items_count * width) / items_count
                 for d = 1, #self.options[c].item_text do
                     local option_item
                     if option_items_fixed then
@@ -282,18 +321,24 @@ function ConfigOption:init()
                                 face = Font:getFace(item_font_face, item_font_size[d]),
                                 fgcolor = Blitbuffer.gray(enabled and 1.0 or 0.5),
                             },
-                            padding = 3,
+                            padding = padding_button,
                             color = d == current_item and Blitbuffer.gray(enabled and 1.0 or 0.5) or Blitbuffer.COLOR_WHITE,
                             enabled = enabled,
                         }
                     else
+                        local text = self.options[c].item_text[d]
+                        local face = Font:getFace(item_font_face, item_font_size)
+                        local width_item_text = RenderText:sizeUtf8Text(0, Screen:getWidth(), face, text).x
+                        if max_item_text_width < width_item_text then
+                            text = RenderText:truncateTextByWidth(text, face, max_item_text_width)
+                        end
                         option_item = OptionTextItem:new{
                             TextWidget:new{
-                                text = self.options[c].item_text[d],
-                                face = Font:getFace(item_font_face, item_font_size),
+                                text = text,
+                                face = face,
                                 fgcolor = Blitbuffer.gray(enabled and 1.0 or 0.5),
                             },
-                            padding = -3,
+                            padding = -padding_button,
                             color = d == current_item and Blitbuffer.gray(enabled and 1.0 or 0.5) or Blitbuffer.COLOR_WHITE,
                             enabled = enabled,
                         }
@@ -325,7 +370,7 @@ function ConfigOption:init()
                 local max_item_spacing = (Screen:getWidth() * item_align -
                         first_item:getSize().w * items_count) / items_count
                 local items_spacing = HorizontalSpan:new{
-                    width = math.min(max_item_spacing, Screen:scaleBySize(item_spacing_with))
+                    width = math.min(max_item_spacing, item_spacing_width)
                 }
                 for d = 1, #self.options[c].item_icons do
                     local option_item = OptionIconItem:new{
@@ -333,7 +378,7 @@ function ConfigOption:init()
                             file = self.options[c].item_icons[d],
                             dim = not enabled,
                         },
-                        padding = -2,
+                        padding = -padding_button,
                         color = d == current_item and Blitbuffer.gray(enabled and 1.0 or 0.5) or Blitbuffer.COLOR_WHITE,
                         enabled = enabled,
                     }
@@ -354,9 +399,8 @@ function ConfigOption:init()
             end
 
             if self.options[c].toggle then
-                local max_toggle_width = Screen:getWidth() / 2
-                local toggle_width = Screen:scaleBySize(self.options[c].width
-                                                        or 216)
+                local max_toggle_width = Screen:getWidth() * item_align * 0.85
+                local toggle_width = Screen:scaleBySize(self.options[c].width or max_toggle_width)
                 local row_count = self.options[c].row_count or 1
                 local toggle_height = Screen:scaleBySize(self.options[c].height
                                                          or 30 * row_count)
@@ -382,6 +426,34 @@ function ConfigOption:init()
                 table.insert(option_items_group, switch)
             end
 
+            if self.options[c].buttonprogress then
+                local max_buttonprogress_width = Screen:getWidth() * item_align * 0.85
+                local buttonprogress_width = Screen:scaleBySize(self.options[c].width or max_buttonprogress_width)
+                local switch = ButtonProgressWidget:new{
+                    width = math.min(max_buttonprogress_width, buttonprogress_width),
+                    height = option_height,
+                    font_face = item_font_face,
+                    font_size = item_font_size,
+                    num_buttons = #self.options[c].values,
+                    position = self.options[c].default_pos,
+                    callback = function(arg)
+                        UIManager:scheduleIn(0.05, function()
+                            self.config:onConfigChoice(self.options[c].name, self.options[c].values[arg])
+                            self.config:onConfigEvent(self.options[c].event, self.options[c].args[arg])
+                            UIManager:setDirty("all")
+                        end)
+                    end,
+                    hold_callback = function(arg)
+                        self.config:onMakeDefault(self.options[c].name, self.options[c].name_text, self.options[c].values,
+                            self.options[c].args, arg)
+                    end,
+                    show_parrent = self.config,
+                    enabled = enabled,
+                }
+                local position = current_item
+                switch:setPosition(position)
+                table.insert(option_items_group, switch)
+            end
             table.insert(option_items_container, option_items_group)
             table.insert(horizontal_group, option_items_container)
             table.insert(vertical_group, horizontal_group)
@@ -405,41 +477,120 @@ function ConfigPanel:init()
     table.insert(self, panel)
 end
 
-local MenuBar = FrameContainer:new{ background = Blitbuffer.COLOR_WHITE, }
+local MenuBar = FrameContainer:new{
+    bordersize = 0,
+    padding = 0,
+    background = Blitbuffer.COLOR_WHITE,
+}
 function MenuBar:init()
+    local icon_sep_width = Size.padding.button
+    local line_thickness = Size.line.thick
     local config_options = self.config_dialog.config_options
     local menu_items = {}
-    local icons_width = 0
-    local icons_height = 0
+    local icon_width = Screen:scaleBySize(40)
+    local icon_height = icon_width
+    local icons_width = (icon_width + 2*icon_sep_width) * #config_options
+    local icons_height = icon_height
     for c = 1, #config_options do
         local menu_icon = IconButton:new{
             show_parent = self.config_dialog,
             icon_file = config_options[c].icon,
+            width = icon_width,
+            height = icon_height,
+            scale_for_dpi = false,
             callback = function()
                 self.config_dialog:handleEvent(Event:new("ShowConfigPanel", c))
             end,
         }
-        local icon_dimen = menu_icon:getSize()
-        icons_width = icons_width + icon_dimen.w
-        icons_height = icon_dimen.h > icons_height and icon_dimen.h or icons_height
-
         menu_items[c] = menu_icon
     end
 
-    local spacing = HorizontalSpan:new{
-        width = (Screen:getWidth() - icons_width) / (#menu_items+1)
-    }
+    local available_width = Screen:getWidth() - icons_width
+    -- local padding = math.floor(available_width / #menu_items / 2) -- all for padding
+    -- local padding = math.floor(available_width / #menu_items / 2 / 2) -- half padding, half spacing ?
+    local padding = math.min(math.floor(available_width / #menu_items / 2), Screen:scaleBySize(20)) -- as in TouchMenuBar
+    if padding > 0 then
+        for c = 1, #menu_items do
+            menu_items[c].padding_left = padding
+            menu_items[c].padding_right = padding
+            menu_items[c]:update()
+        end
+        available_width = available_width - 2*padding*#menu_items
+    end
+    local spacing_width = math.ceil(available_width / (#menu_items+1))
 
+    local icon_sep_black = LineWidget:new{
+        background = Blitbuffer.COLOR_BLACK,
+        dimen = Geom:new{
+            w = icon_sep_width,
+            h = icons_height,
+        }
+    }
+    local icon_sep_white = LineWidget:new{
+        background = Blitbuffer.COLOR_WHITE,
+        dimen = Geom:new{
+            w = icon_sep_width,
+            h = icons_height,
+        }
+    }
+    local spacing = HorizontalSpan:new{
+        width = spacing_width,
+    }
+    local spacing_line = LineWidget:new{
+        dimen = Geom:new{
+            w = spacing_width,
+            h = line_thickness,
+        }
+    }
+    local sep_line = LineWidget:new{
+        dimen = Geom:new{
+            w = icon_sep_width,
+            h = line_thickness,
+        }
+    }
     local menu_bar = HorizontalGroup:new{}
+    local line_bar = HorizontalGroup:new{}
 
     for c = 1, #menu_items do
         table.insert(menu_bar, spacing)
-        table.insert(menu_bar, menu_items[c])
+        table.insert(line_bar, spacing_line)
+        if c == self.panel_index then
+            table.insert(menu_bar, icon_sep_black)
+            table.insert(line_bar, sep_line)
+            table.insert(menu_bar, menu_items[c])
+            table.insert(line_bar, LineWidget:new{
+                background = Blitbuffer.COLOR_WHITE,
+                dimen = Geom:new{
+                    w = menu_items[c]:getSize().w,
+                    h = line_thickness,
+                }
+            })
+            table.insert(menu_bar, icon_sep_black)
+            table.insert(line_bar, sep_line)
+        else
+            table.insert(menu_bar, icon_sep_white)
+            table.insert(line_bar, sep_line)
+            table.insert(menu_bar, menu_items[c])
+            table.insert(line_bar, LineWidget:new{
+                dimen = Geom:new{
+                    w = menu_items[c]:getSize().w,
+                    h = line_thickness,
+                }
+            })
+            table.insert(menu_bar, icon_sep_white)
+            table.insert(line_bar, sep_line)
+        end
     end
     table.insert(menu_bar, spacing)
+    table.insert(line_bar, spacing_line)
 
     self.dimen = Geom:new{ w = Screen:getWidth(), h = icons_height}
-    table.insert(self, menu_bar)
+    local vertical_menu = VerticalGroup:new{
+        line_bar,
+        menu_bar,
+    }
+    table.insert(self, vertical_menu)
+
 end
 
 --[[
@@ -470,9 +621,6 @@ function ConfigDialog:init()
     ------------------------------------------
     -- start to set up widget layout ---------
     ------------------------------------------
-    self.config_menubar = MenuBar:new{
-        config_dialog = self,
-    }
     self:update()
     ------------------------------------------
     -- start to set up input event callback --
@@ -513,6 +661,10 @@ function ConfigDialog:updateConfigPanel(index)
 end
 
 function ConfigDialog:update()
+    self.config_menubar = MenuBar:new{
+        config_dialog = self,
+        panel_index = self.panel_index,
+    }
     self.config_panel = ConfigPanel:new{
         index = self.panel_index,
         config_dialog = self,

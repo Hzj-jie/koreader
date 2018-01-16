@@ -1,6 +1,6 @@
-local Screen = require("device").screen
 local S = require("ui/data/strings")
 local _ = require("gettext")
+local Screen = require("device").screen
 
 local function enable_if_equals(configurable, option, value)
     return configurable[option] == value
@@ -29,7 +29,6 @@ local KoptOptions = {
             {
                 name = "trim_page",
                 name_text = S.PAGE_CROP,
-                width = 261,
                 toggle = {S.MANUAL, S.AUTO, S.SEMIAUTO},
                 alternate = false,
                 values = {0, 1, 2},
@@ -148,14 +147,12 @@ local KoptOptions = {
             {
                 name = "contrast",
                 name_text = S.CONTRAST,
-                name_align_right = 0.25,
-                item_text = {S.LIGHTER, S.DEFAULT, S.DARKER, S.DARKEST},
-                item_font_size = 18,
-                item_align_center = 0.7,
-                values = {1.5, 1.0, 0.5, 0.2},
+                buttonprogress = true,
+                values = {1/0.8, 1/1.0, 1/1.5, 1/2.0, 1/3.0, 1/4.0, 1/6.0, 1/9.0},
+                default_pos = 2,
                 default_value = DKOPTREADER_CONFIG_CONTRAST,
                 event = "GammaUpdate",
-                args = {0.8, 1.0, 2.0, 4.0},
+                args = {0.8, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0, 9.0},
             }
         }
     },

@@ -1,18 +1,26 @@
-local TextWidget = require("ui/widget/textwidget")
-local InputContainer = require("ui/widget/container/inputcontainer")
-local FrameContainer = require("ui/widget/container/framecontainer")
+--[[--
+Displays a button that toggles between states. Used in bottom configuration panel.
+
+@usage
+    local ToggleSwitch = require("ui/widget/toggleswitch")
+]]
+
+local Blitbuffer = require("ffi/blitbuffer")
 local CenterContainer = require("ui/widget/container/centercontainer")
-local HorizontalGroup = require("ui/widget/horizontalgroup")
-local VerticalGroup = require("ui/widget/verticalgroup")
+local Device = require("device")
 local Font = require("ui/font")
 local Geom = require("ui/geometry")
-local RenderText = require("ui/rendertext")
-local UIManager = require("ui/uimanager")
-local Screen = require("device").screen
-local Device = require("device")
 local GestureRange = require("ui/gesturerange")
-local Blitbuffer = require("ffi/blitbuffer")
+local HorizontalGroup = require("ui/widget/horizontalgroup")
+local InputContainer = require("ui/widget/container/inputcontainer")
+local FrameContainer = require("ui/widget/container/framecontainer")
+local RenderText = require("ui/rendertext")
+local Size = require("ui/size")
+local TextWidget = require("ui/widget/textwidget")
+local UIManager = require("ui/uimanager")
+local VerticalGroup = require("ui/widget/verticalgroup")
 local _ = require("gettext")
+local Screen = Device.screen
 
 local ToggleLabel = TextWidget:new{
     bold = true,
@@ -21,13 +29,13 @@ local ToggleLabel = TextWidget:new{
 }
 
 function ToggleLabel:paintTo(bb, x, y)
-    RenderText:renderUtf8Text(bb, x, y+self._height*0.75, self.face, self.text, true, self.bold, self.fgcolor)
+    RenderText:renderUtf8Text(bb, x, y+self._baseline_h, self.face, self.text, true, self.bold, self.fgcolor)
 end
 
 local ToggleSwitch = InputContainer:new{
     width = Screen:scaleBySize(216),
-    height = Screen:scaleBySize(30),
-    bgcolor = Blitbuffer.COLOR_WHITE, -- unfoused item color
+    height = Size.item.height_default,
+    bgcolor = Blitbuffer.COLOR_WHITE, -- unfocused item color
     fgcolor = Blitbuffer.COLOR_GREY, -- focused item color
     font_face = "cfont",
     font_size = 16,
@@ -43,9 +51,9 @@ function ToggleSwitch:init()
     self.toggle_frame = FrameContainer:new{
         background = Blitbuffer.COLOR_WHITE,
         color = Blitbuffer.COLOR_GREY,
-        radius = 7,
-        bordersize = 1,
-        padding = 2,
+        radius = Size.radius.window,
+        bordersize = Size.border.thin,
+        padding = Size.padding.small,
         dim = not self.enabled,
     }
 
@@ -58,11 +66,18 @@ function ToggleSwitch:init()
         w = self.width / self.n_pos,
         h = self.height / self.row_count,
     }
+    local button_width = math.floor(self.width / self.n_pos)
     for i = 1, #self.toggle do
+        local text = self.toggle[i]
+        local face = Font:getFace(self.font_face, self.font_size)
+        local txt_width = RenderText:sizeUtf8Text(0, Screen:getWidth(), face, text, nil, self.bold).x
+        if  button_width - Size.padding.default < txt_width then
+            text = RenderText:truncateTextByWidth(text, face, button_width - Size.padding.default, nil, self.bold)
+        end
         local label = ToggleLabel:new{
             align = "center",
-            text = self.toggle[i],
-            face = Font:getFace(self.font_face, self.font_size),
+            text = text,
+            face = face,
         }
         local content = CenterContainer:new{
             dimen = center_dimen,
@@ -72,8 +87,8 @@ function ToggleSwitch:init()
             background = Blitbuffer.COLOR_WHITE,
             color = Blitbuffer.COLOR_GREY,
             margin = 0,
-            radius = 5,
-            bordersize = 1,
+            radius = Size.radius.window,
+            bordersize = Size.border.thin,
             padding = 0,
             content,
         }
@@ -142,11 +157,17 @@ end
 function ToggleSwitch:calculatePosition(gev)
     local x = (gev.pos.x - self.dimen.x) / self.dimen.w * self.n_pos
     local y = (gev.pos.y - self.dimen.y) / self.dimen.h * self.row_count
-    return math.ceil(x) + math.floor(y) * self.n_pos
+    return math.max(1, math.ceil(x)) + math.min(self.row_count-1, math.floor(y)) * self.n_pos
 end
 
 function ToggleSwitch:onTapSelect(arg, gev)
-    if not self.enabled then return true end
+    if not self.enabled then
+        if self.readonly ~= true then
+            return true
+        else
+            return
+        end
+    end
     local position = self:calculatePosition(gev)
     self:togglePosition(position)
     --[[

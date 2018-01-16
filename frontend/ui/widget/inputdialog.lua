@@ -57,13 +57,13 @@ local InputContainer = require("ui/widget/container/inputcontainer")
 local InputText = require("ui/widget/inputtext")
 local LineWidget = require("ui/widget/linewidget")
 local RenderText = require("ui/rendertext")
+local Size = require("ui/size")
 local TextBoxWidget = require("ui/widget/textboxwidget")
 local TextWidget = require("ui/widget/textwidget")
-local VerticalGroup = require("ui/widget/verticalgroup")
-local WidgetContainer = require("ui/widget/container/widgetcontainer")
 local UIManager = require("ui/uimanager")
+local VerticalGroup = require("ui/widget/verticalgroup")
+local VerticalSpan = require("ui/widget/verticalspan")
 local Screen = require("device").screen
-local _ = require("gettext")
 
 local InputDialog = InputContainer:new{
     title = "",
@@ -73,7 +73,6 @@ local InputDialog = InputContainer:new{
     buttons = nil,
     input_type = nil,
     enter_callback = nil,
-    show_password_toggle = true,
 
     width = nil,
 
@@ -84,11 +83,11 @@ local InputDialog = InputContainer:new{
     description_face = Font:getFace("x_smallinfofont"),
     input_face = Font:getFace("x_smallinfofont"),
 
-    title_padding = Screen:scaleBySize(5),
-    title_margin = Screen:scaleBySize(2),
-    input_padding = Screen:scaleBySize(10),
-    input_margin = Screen:scaleBySize(10),
-    button_padding = Screen:scaleBySize(14),
+    title_padding = Size.padding.default,
+    title_margin = Size.margin.title,
+    input_padding = Size.padding.large,
+    input_margin = Size.margin.default,
+    button_padding = Size.padding.default,
 }
 
 function InputDialog:init()
@@ -121,11 +120,11 @@ function InputDialog:init()
             TextBoxWidget:new{
                 text = self.description,
                 face = self.description_face,
-                width = self.width,
+                width = self.width - 2*self.title_padding - 2*self.title_margin,
             }
         }
     else
-        self.description = WidgetContainer:new()
+        self.description = VerticalSpan:new{ width = self.title_margin + self.title_padding }
     end
 
     self._input_widget = InputText:new{
@@ -149,28 +148,8 @@ function InputDialog:init()
         scroll = false,
         parent = self,
     }
-    local is_password_type = false
-    if self._input_widget.text_type == "password" then
-        is_password_type = true
-    end
-    if self.show_password_toggle and is_password_type then
-        local button_switch = {
-            {
-                text = _("Show password"),
-                callback = function()
-                    if self._input_widget.text_type == "text" then
-                        self._input_widget.text_type = "password"
-                    else
-                        self._input_widget.text_type = "text"
-                    end
-                    self._input_widget:setText(self._input_widget:getText())
-                end,
-            },
-        }
-        table.insert(self.buttons[1], button_switch[1])
-    end
     self.button_table = ButtonTable:new{
-        width = self.width,
+        width = self.width - 2*self.button_padding,
         button_font_face = "cfont",
         button_font_size = 20,
         buttons = self.buttons,
@@ -180,14 +159,13 @@ function InputDialog:init()
 
     self.title_bar = LineWidget:new{
         dimen = Geom:new{
-            w = self.button_table:getSize().w + self.button_padding,
-            h = Screen:scaleBySize(2),
+            w = self.width,
+            h = Size.line.thick,
         }
     }
 
     self.dialog_frame = FrameContainer:new{
-        radius = 8,
-        bordersize = 3,
+        radius = Size.radius.window,
         padding = 0,
         margin = 0,
         background = Blitbuffer.COLOR_WHITE,
@@ -204,6 +182,8 @@ function InputDialog:init()
                 },
                 self._input_widget,
             },
+            -- Add same vertical space after than before InputText
+            VerticalSpan:new{ width = self.title_margin + self.title_padding },
             -- buttons
             CenterContainer:new{
                 dimen = Geom:new{

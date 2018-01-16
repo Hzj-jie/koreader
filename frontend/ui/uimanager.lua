@@ -21,6 +21,9 @@ local UIManager = {
         G_reader_settings:readSetting("full_refresh_count") or DRCOUNTMAX,
     refresh_count = 0,
 
+    -- How long to wait between ZMQ wakeups: 50ms.
+    ZMQ_TIMEOUT = 50 * 1000,
+
     event_handlers = nil,
 
     _running = true,
@@ -55,6 +58,7 @@ function UIManager:init()
         require("ui/screensaver"):show("poweroff", _("Powered off"))
         Screen:refreshFull()
         UIManager:nextTick(function()
+            Device:saveSettings()
             self:broadcastEvent(Event:new("Close"))
             Device:powerOff()
         end)
@@ -65,9 +69,20 @@ function UIManager:init()
         require("ui/screensaver"):show("reboot", _("Rebooting..."))
         Screen:refreshFull()
         UIManager:nextTick(function()
+            Device:saveSettings()
             self:broadcastEvent(Event:new("Close"))
             Device:reboot()
         end)
+    end
+    if Device:isPocketBook() then
+        self.event_handlers["Suspend"] = function()
+            self:_beforeSuspend()
+            Device:onPowerEvent("Power")
+        end
+        self.event_handlers["Resume"] = function()
+            Device:onPowerEvent("Power")
+            self:_afterResume()
+        end
     end
     if Device:isKobo() then
         -- We do not want auto suspend procedure to waste battery during
@@ -189,7 +204,7 @@ function UIManager:show(widget, refreshtype, refreshregion, x, y)
     for i = #self._window_stack, 0, -1 do
         local top_window = self._window_stack[i]
         -- skip modal window
-        if not top_window or not top_window.widget.modal then
+        if widget.modal or not top_window or not top_window.widget.modal then
             table.insert(self._window_stack, i + 1, window)
             break
         end
@@ -631,7 +646,7 @@ function UIManager:_repaint()
     -- we should have at least one refresh if we did repaint.  If we don't, we
     -- add one now and log a warning if we are debugging
     if dirty and #self._refresh_stack == 0 then
-        logger.warn("no refresh got enqueued. Will do a partial full screen refresh, which might be inefficient")
+        logger.dbg("no refresh got enqueued. Will do a partial full screen refresh, which might be inefficient")
         self:_refresh("partial")
     end
 
@@ -658,6 +673,27 @@ function UIManager:resetInputTimeout()
     self.INPUT_TIMEOUT = nil
 end
 
+function UIManager:handleInputEvent(input_event)
+    if input_event.handler ~= "onInputError" then
+        self.event_hook:execute("InputEvent", input_event)
+    end
+    local handler = self.event_handlers[input_event]
+    if handler then
+        handler(input_event)
+    else
+        self.event_handlers["__default__"](input_event)
+    end
+end
+
+-- Process all pending events on all registered ZMQs.
+function UIManager:processZMQs()
+    for _, zeromq in ipairs(self._zeromqs) do
+        for input_event in zeromq.waitEvent,zeromq do
+            self:handleInputEvent(input_event)
+        end
+    end
+end
+
 function UIManager:handleInput()
     local wait_until, now
     -- run this in a loop, so that paints can trigger events
@@ -681,42 +717,32 @@ function UIManager:handleInput()
         self:_repaint()
     until not self._task_queue_dirty
 
-    -- wait for next event
-    -- note that we will skip that if we have tasks that are ready to run
-    local input_event = nil
-    if not wait_until then
-        if #self._zeromqs > 0 then
-            -- pending message queue, wait 100ms for input
-            input_event = Input:waitEvent(1000*100)
-            if not input_event or input_event.handler == "onInputError" then
-                for _, zeromq in ipairs(self._zeromqs) do
-                    input_event = zeromq:waitEvent()
-                    if input_event then break end
-                end
-            end
-        else
-            -- no pending task, wait without timeout
-            input_event = Input:waitEvent(self.INPUT_TIMEOUT)
-        end
-    elseif wait_until[1] > now[1]
-    or wait_until[1] == now[1] and wait_until[2] > now[2] then
-        -- wait until next task is pending
-        local wait_us = (wait_until[1] - now[1]) * MILLION
-                        + (wait_until[2] - now[2])
-        input_event = Input:waitEvent(wait_us)
+    -- run ZMQs if any
+    self:processZMQs()
+
+    -- Figure out how long to wait.
+    -- Default to INPUT_TIMEOUT (which may be nil, i.e. block until an event happens).
+    local wait_us = self.INPUT_TIMEOUT
+
+    -- If there's a timed event pending, that puts an upper bound on how long to wait.
+    if wait_until then
+        wait_us = math.min(
+            wait_us or math.huge,
+            (wait_until[1] - now[1]) * MILLION
+            + (wait_until[2] - now[2]))
     end
+
+    -- If we have any ZMQs registered, ZMQ_TIMEOUT is another upper bound.
+    if #self._zeromqs > 0 then
+        wait_us = math.min(wait_us or math.huge, self.ZMQ_TIMEOUT)
+    end
+
+    -- wait for next event
+    local input_event = Input:waitEvent(wait_us)
 
     -- delegate input_event to handler
     if input_event then
-        if input_event.handler ~= "onInputError" then
-            self.event_hook:execute("InputEvent", input_event)
-        end
-        local handler = self.event_handlers[input_event]
-        if handler then
-            handler(input_event)
-        else
-            self.event_handlers["__default__"](input_event)
-        end
+        self:handleInputEvent(input_event)
     end
 
     if self.looper then

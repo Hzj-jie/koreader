@@ -27,6 +27,7 @@ local MODE = {
     chapter_time_to_read = 7,
     frontlight = 8,
     mem_usage = 9,
+    wifi_status = 10,
 }
 
 local MODE_NB = 0
@@ -43,7 +44,11 @@ local footerTextGeneratorMap = {
         if not Device:hasFrontlight() then return "L: NA" end
         local powerd = Device:getPowerDevice()
         if powerd:isFrontlightOn() then
-            return ("L: %d%%"):format(powerd:frontlightIntensity())
+            if Device:isKobo() then
+                return ("L: %d%%"):format(powerd:frontlightIntensity())
+            else
+                return ("L: %d"):format(powerd:frontlightIntensity())
+            end
         else
             return "L: Off"
         end
@@ -97,6 +102,14 @@ local footerTextGeneratorMap = {
         end
         return ""
     end,
+    wifi_status = function()
+        local NetworkMgr = require("ui/network/manager")
+        if NetworkMgr:isWifiOn() then
+            return "W:On"
+        else
+            return "W:Off"
+        end
+    end,
 }
 
 local ReaderFooter = WidgetContainer:extend{
@@ -112,6 +125,7 @@ local ReaderFooter = WidgetContainer:extend{
     height = Screen:scaleBySize(DMINIBAR_CONTAINER_HEIGHT),
     horizontal_margin = Screen:scaleBySize(10),
     text_left_margin = Screen:scaleBySize(10),
+    bottom_padding = Screen:scaleBySize(1),
     settings = {},
     -- added to expose them to unit tests
     textGeneratorMap = footerTextGeneratorMap,
@@ -133,6 +147,7 @@ function ReaderFooter:init()
         chapter_time_to_read = true,
         frontlight = false,
         mem_usage = false,
+        wifi_status = false,
     }
 
     if self.settings.disabled then
@@ -182,6 +197,7 @@ function ReaderFooter:init()
         background = Blitbuffer.COLOR_WHITE,
         bordersize = 0,
         padding = 0,
+        padding_bottom = self.bottom_padding,
     }
     self.footer_container = BottomContainer:new{
         dimen = Geom:new{ w = 0, h = self.height*2 },
@@ -325,6 +341,7 @@ local option_titles = {
     chapter_time_to_read = _("Chapter time to read"),
     frontlight = _("Frontlight level"),
     mem_usage = _("KOReader memory usage"),
+    wifi_status = _("Wi-Fi status"),
 }
 
 function ReaderFooter:addToMainMenu(menu_items)
@@ -452,6 +469,9 @@ function ReaderFooter:addToMainMenu(menu_items)
         table.insert(sub_items, getMinibarOption("frontlight"))
     end
     table.insert(sub_items, getMinibarOption("mem_usage"))
+    if Device:isAndroid() then
+        table.insert(sub_items, getMinibarOption("wifi_status"))
+    end
 end
 
 -- this method will be updated at runtime based on user setting
@@ -495,12 +515,14 @@ function ReaderFooter:setTocMarkers()
     return true
 end
 
+function ReaderFooter:getAvgTimePerPage()
+    return
+end
+
 function ReaderFooter:getDataFromStatistics(title, pages)
-    local statistics_data = self.ui.doc_settings:readSetting("stats")
     local sec = 'na'
-    if statistics_data and statistics_data.performance_in_pages then
-        local read_pages = util.tableSize(statistics_data.performance_in_pages)
-        local average_time_per_page = statistics_data.total_time_in_sec / read_pages
+    local average_time_per_page = self:getAvgTimePerPage()
+    if average_time_per_page then
         sec = util.secondsToClock(pages * average_time_per_page, true)
     end
     return title .. sec
@@ -562,9 +584,14 @@ function ReaderFooter:onPageUpdate(pageno)
     self:updateFooterPage()
 end
 
-function ReaderFooter:onPosUpdate(pos)
+function ReaderFooter:onPosUpdate(pos, pageno)
     self.position = pos
     self.doc_height = self.view.document.info.doc_height
+    if pageno then
+        self.pageno = pageno
+        self.pages = self.view.document:getPageCount()
+        self.ui.doc_settings:saveSetting("doc_pages", self.pages) -- for Book information
+    end
     self:updateFooterPos()
 end
 
@@ -593,6 +620,7 @@ function ReaderFooter:applyFooterMode(mode)
     -- 7 for from statistics chapter time to read
     -- 8 for front light level
     -- 9 for memory usage
+    -- 10 for wifi status
     if mode ~= nil then self.mode = mode end
     self.view.footer_visible = (self.mode ~= MODE.off)
     if not self.view.footer_visible or self.settings.all_at_once then return end

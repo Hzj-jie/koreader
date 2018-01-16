@@ -66,9 +66,15 @@ function Kindle:supportsScreensaver()
     end
 end
 
-function Kindle:setTime(hour, min)
+function Kindle:setDateTime(year, month, day, hour, min, sec)
     if hour == nil or min == nil then return true end
-    if os.execute(string.format("date -s '%d:%d'", hour, min)) == 0 then
+    local command
+    if year and month and day then
+        command = string.format("date -s '%d-%d-%d %d:%d:%d'", year, month, day, hour, min, sec)
+    else
+        command = string.format("date -s '%d:%d'",hour, min)
+    end
+    if os.execute(command) == 0 then
         os.execute('hwclock -u -w')
         return true
     else
@@ -88,8 +94,8 @@ end
 
 function Kindle:intoScreenSaver()
     local Screensaver = require("ui/screensaver")
-    if self:supportsScreensaver() and Screensaver:isUsingBookCover() then
-        Screensaver:show("suspend")
+    if self:supportsScreensaver() then
+        Screensaver:show()
     end
     self.powerd:beforeSuspend()
     if self.charging_mode == false and self.screen_saver_mode == false then
@@ -108,7 +114,7 @@ function Kindle:outofScreenSaver()
             os.execute("killall -stop awesome")
         end
         local Screensaver = require("ui/screensaver")
-        if self:supportsScreensaver() and Screensaver.isUsingBookCover() then
+        if self:supportsScreensaver() then
             Screensaver:close()
         end
         local UIManager = require("ui/uimanager")
@@ -528,6 +534,7 @@ function KindleBasic2:init()
 end
 
 function KindleTouch:exit()
+    Generic.exit(self)
     if isSpecialOffers() then
         -- fake a touch event
         if self.touch_dev then
@@ -538,7 +545,6 @@ function KindleTouch:exit()
             )
         end
     end
-    Generic.exit(self)
 end
 KindlePaperWhite.exit = KindleTouch.exit
 KindlePaperWhite2.exit = KindleTouch.exit
