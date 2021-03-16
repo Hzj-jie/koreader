@@ -8,6 +8,7 @@ Displays some text in a scrollable view.
     }
     UIManager:show(textviewer)
 ]]
+local BD = require("ui/bidi")
 local Blitbuffer = require("ffi/blitbuffer")
 local ButtonTable = require("ui/widget/buttontable")
 local CenterContainer = require("ui/widget/container/centercontainer")
@@ -19,6 +20,7 @@ local FrameContainer = require("ui/widget/container/framecontainer")
 local GestureRange = require("ui/gesturerange")
 local InputContainer = require("ui/widget/container/inputcontainer")
 local LineWidget = require("ui/widget/linewidget")
+local MovableContainer = require("ui/widget/container/movablecontainer")
 local OverlapGroup = require("ui/widget/overlapgroup")
 local ScrollTextWidget = require("ui/widget/scrolltextwidget")
 local Size = require("ui/size")
@@ -31,11 +33,24 @@ local _ = require("gettext")
 local Screen = Device.screen
 
 local TextViewer = InputContainer:new{
+    modal = true,
     title = nil,
     text = nil,
     width = nil,
     height = nil,
     buttons_table = nil,
+    -- See TextBoxWidget for details about these options
+    -- We default to justified and auto_para_direction to adapt
+    -- to any kind of text we are given (book descriptions,
+    -- bookmarks' text, translation results...).
+    -- When used to display more technical text (HTML, CSS,
+    -- application logs...), it's best to reset them to false.
+    alignment = "left",
+    justified = true,
+    lang = nil,
+    para_direction_rtl = nil,
+    auto_para_direction = true,
+    alignment_strict = false,
 
     title_face = Font:getFace("x_smalltfont"),
     text_face = Font:getFace("x_smallinfofont"),
@@ -150,14 +165,19 @@ function TextViewer:init()
     local textw_height = self.height - titlew:getSize().h - separator:getSize().h - button_table:getSize().h
 
     self.scroll_text_w = ScrollTextWidget:new{
-            text = self.text,
-            face = self.text_face,
-            width = self.width - 2*self.text_padding - 2*self.text_margin,
-            height = textw_height - 2*self.text_padding -2*self.text_margin,
-            dialog = self,
-            justified = true,
+        text = self.text,
+        face = self.text_face,
+        width = self.width - 2*self.text_padding - 2*self.text_margin,
+        height = textw_height - 2*self.text_padding -2*self.text_margin,
+        dialog = self,
+        alignment = self.alignment,
+        justified = self.justified,
+        lang = self.lang,
+        para_direction_rtl = self.para_direction_rtl,
+        auto_para_direction = self.auto_para_direction,
+        alignment_strict = self.alignment_strict,
     }
-    local textw = FrameContainer:new{
+    self.textw = FrameContainer:new{
         padding = self.text_padding,
         margin = self.text_margin,
         bordersize = 0,
@@ -176,9 +196,9 @@ function TextViewer:init()
             CenterContainer:new{
                 dimen = Geom:new{
                     w = self.width,
-                    h = textw:getSize().h,
+                    h = self.textw:getSize().h,
                 },
-                textw,
+                self.textw,
             },
             CenterContainer:new{
                 dimen = Geom:new{
@@ -189,12 +209,16 @@ function TextViewer:init()
             }
         }
     }
+    self.movable = MovableContainer:new{
+        ignore_events = {"swipe"},
+        self.frame,
+    }
     self[1] = WidgetContainer:new{
         align = self.align,
         dimen = self.region,
-        self.frame,
+        self.movable,
     }
-    UIManager:setDirty("all", function()
+    UIManager:setDirty(self, function()
         local update_region = self.frame.dimen:combine(orig_dimen)
         logger.dbg("update region", update_region)
         return "partial", update_region
@@ -233,19 +257,24 @@ function TextViewer:onClose()
 end
 
 function TextViewer:onSwipe(arg, ges)
-    if ges.direction == "west" then
-        self.scroll_text_w:scrollText(1)
-        return true
-    elseif ges.direction == "east" then
-        self.scroll_text_w:scrollText(-1)
-        return true
-    else
-        -- trigger full refresh
-        UIManager:setDirty(nil, "full")
-        -- a long diagonal swipe may also be used for taking a screenshot,
-        -- so let it propagate
-        return false
+    if ges.pos:intersectWith(self.textw.dimen) then
+        local direction = BD.flipDirectionIfMirroredUILayout(ges.direction)
+        if direction == "west" then
+            self.scroll_text_w:scrollText(1)
+            return true
+        elseif direction == "east" then
+            self.scroll_text_w:scrollText(-1)
+            return true
+        else
+            -- trigger a full-screen HQ flashing refresh
+            UIManager:setDirty(nil, "full")
+            -- a long diagonal swipe may also be used for taking a screenshot,
+            -- so let it propagate
+            return false
+        end
     end
+    -- Let our MovableContainer handle swipe outside of text
+    return self.movable:onMovableSwipe(arg, ges)
 end
 
 return TextViewer

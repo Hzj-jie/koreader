@@ -1,20 +1,21 @@
+local Dispatcher = require("dispatcher")
 local InputContainer = require("ui/widget/container/inputcontainer")
 local LoginDialog = require("ui/widget/logindialog")
 local InfoMessage = require("ui/widget/infomessage")
 local ConfirmBox = require("ui/widget/confirmbox")
 local NetworkMgr = require("ui/network/manager")
 local UIManager = require("ui/uimanager")
-local Screen = require("device").screen
-local DeviceModel = require("device").model
+local Device = require("device")
 local Event = require("ui/event")
 local Math = require("optmath")
-local DEBUG = require("dbg")
+local Screen = Device.screen
+local logger = require("logger")
+local md5 = require("ffi/sha2").md5
+local random = require("random")
 local T = require("ffi/util").template
 local _ = require("gettext")
-local md5 = require("ffi/MD5")
-local random = require("random")
 
-if not G_reader_settings:readSetting("device_id") then
+if G_reader_settings:hasNot("device_id") then
     G_reader_settings:saveSetting("device_id", random.uuid())
 end
 
@@ -39,8 +40,14 @@ local SYNC_STRATEGY = {
     DEFAULT_BACKWARD = 3,
 }
 
-local function roundPercent(percent)
-    return math.floor(percent * 10000) / 10000
+local function getNameStrategy(type)
+    if type == 1 then
+        return _("Prompt")
+    elseif type == 2 then
+        return _("Auto")
+    else
+        return _("Disable")
+    end
 end
 
 local function showSyncedMessage()
@@ -64,12 +71,46 @@ local function showSyncError()
     })
 end
 
+local function validate(entry)
+    if not entry then return false end
+    if type(entry) == "string" then
+        if entry == "" or not entry:match("%S") then return false end
+    end
+    return true
+end
+
+local function validateUser(user, pass)
+    local error_message = nil
+    local user_ok = validate(user)
+    local pass_ok = validate(pass)
+    if not user_ok and not pass_ok then
+        error_message = _("invalid username and password")
+    elseif not user_ok then
+        error_message = _("invalid username")
+    elseif not pass_ok then
+        error_message = _("invalid password")
+    end
+
+    if not error_message then
+        return user_ok and pass_ok
+    else
+        return user_ok and pass_ok, error_message
+    end
+end
+
+function KOSync:onDispatcherRegisterActions()
+    Dispatcher:registerAction("kosync_push_progress", { category="none", event="KOSyncPushProgress", title=_("Push progress from this device"), rolling=true, paging=true,})
+    Dispatcher:registerAction("kosync_pull_progress", { category="none", event="KOSyncPullProgress", title=_("Pull progress from other devices"), rolling=true, paging=true, separator=true,})
+end
+
 function KOSync:onReaderReady()
+    --- @todo: Viable candidate for a port to the new readSetting API
     local settings = G_reader_settings:readSetting("kosync") or {}
     self.kosync_custom_server = settings.custom_server
     self.kosync_username = settings.username
     self.kosync_userkey = settings.userkey
     self.kosync_auto_sync = not (settings.auto_sync == false)
+    self.kosync_pages_before_update = settings.pages_before_update
     self.kosync_whisper_forward = settings.whisper_forward or SYNC_STRATEGY.DEFAULT_FORWARD
     self.kosync_whisper_backward = settings.whisper_backward or SYNC_STRATEGY.DEFAULT_BACKWARD
     self.kosync_device_id = G_reader_settings:readSetting("device_id")
@@ -78,6 +119,7 @@ function KOSync:onReaderReady()
         self:_onResume()
     end
     self:registerEvents()
+    self:onDispatcherRegisterActions()
     self.ui.menu:registerToMainMenu(self)
     -- Make sure checksum has been calculated at the very first time a document has been opened, to
     -- avoid document saving feature to impact the checksum, and eventually impact the document
@@ -94,10 +136,19 @@ function KOSync:addToMainMenu(menu_items)
                     return self.kosync_userkey and (_("Logout"))
                         or _("Register") .. " / " .. _("Login")
                 end,
+                keep_menu_open = true,
                 callback_func = function()
-                    return self.kosync_userkey and
-                        function() self:logout() end or
-                        function() self:login() end
+                    if self.kosync_userkey then
+                        return function(menu)
+                            self._menu_to_update = menu
+                            self:logout()
+                        end
+                    else
+                        return function(menu)
+                            self._menu_to_update = menu
+                            self:login()
+                        end
+                    end
                 end,
             },
             {
@@ -115,6 +166,7 @@ function KOSync:addToMainMenu(menu_items)
                         -- current progress now to avoid to lose it silently.
                         self:updateProgress(true)
                     end
+                    self:saveSettings()
                 end,
             },
             {
@@ -122,66 +174,72 @@ function KOSync:addToMainMenu(menu_items)
                 enabled_func = function() return self.kosync_auto_sync end,
                 sub_item_table = {
                     {
-                        text = "Sync to latest record >>>>",
-                        enabled = false,
+                        text_func = function()
+                            return T(_("Sync to latest record (%1)"), getNameStrategy(self.kosync_whisper_forward))
+                        end,
+                        sub_item_table = {
+                            {
+                                text = _("Auto"),
+                                checked_func = function()
+                                    return self.kosync_whisper_forward == SYNC_STRATEGY.WHISPER
+                                end,
+                                callback = function()
+                                    self:setWhisperForward(SYNC_STRATEGY.WHISPER)
+                                end,
+                            },
+                            {
+                                text = _("Prompt"),
+                                checked_func = function()
+                                    return self.kosync_whisper_forward == SYNC_STRATEGY.PROMPT
+                                end,
+                                callback = function()
+                                    self:setWhisperForward(SYNC_STRATEGY.PROMPT)
+                                end,
+                            },
+                            {
+                                text = _("Disable"),
+                                checked_func = function()
+                                    return self.kosync_whisper_forward == SYNC_STRATEGY.DISABLE
+                                end,
+                                callback = function()
+                                    self:setWhisperForward(SYNC_STRATEGY.DISABLE)
+                                end,
+                            },
+                        }
                     },
                     {
-                        text = _("  Auto"),
-                        checked_func = function()
-                            return self.kosync_whisper_forward == SYNC_STRATEGY.WHISPER
+                        text_func = function()
+                            return T(_("Sync to a previous record (%1)"), getNameStrategy(self.kosync_whisper_backward))
                         end,
-                        callback = function()
-                            self:setWhisperForward(SYNC_STRATEGY.WHISPER)
-                        end,
-                    },
-                    {
-                        text = _("  Prompt"),
-                        checked_func = function()
-                            return self.kosync_whisper_forward == SYNC_STRATEGY.PROMPT
-                        end,
-                        callback = function()
-                            self:setWhisperForward(SYNC_STRATEGY.PROMPT)
-                        end,
-                    },
-                    {
-                        text = _("  Disable"),
-                        checked_func = function()
-                            return self.kosync_whisper_forward == SYNC_STRATEGY.DISABLE
-                        end,
-                        callback = function()
-                            self:setWhisperForward(SYNC_STRATEGY.DISABLE)
-                        end,
-                    },
-                    {
-                        text = "Sync to a previous record <<<<",
-                        enabled = false,
-                    },
-                    {
-                        text = _("  Auto"),
-                        checked_func = function()
-                            return self.kosync_whisper_backward == SYNC_STRATEGY.WHISPER
-                        end,
-                        callback = function()
-                            self:setWhisperBackward(SYNC_STRATEGY.WHISPER)
-                        end,
-                    },
-                    {
-                        text = _("  Prompt"),
-                        checked_func = function()
-                            return self.kosync_whisper_backward == SYNC_STRATEGY.PROMPT
-                        end,
-                        callback = function()
-                            self:setWhisperBackward(SYNC_STRATEGY.PROMPT)
-                        end,
-                    },
-                    {
-                        text = _("  Disable"),
-                        checked_func = function()
-                            return self.kosync_whisper_backward == SYNC_STRATEGY.DISABLE
-                        end,
-                        callback = function()
-                            self:setWhisperBackward(SYNC_STRATEGY.DISABLE)
-                        end,
+                        sub_item_table = {
+                            {
+                                text = _("Auto"),
+                                checked_func = function()
+                                    return self.kosync_whisper_backward == SYNC_STRATEGY.WHISPER
+                                end,
+                                callback = function()
+                                    self:setWhisperBackward(SYNC_STRATEGY.WHISPER)
+                                end,
+                            },
+                            {
+                                text = _("Prompt"),
+                                checked_func = function()
+                                    return self.kosync_whisper_backward == SYNC_STRATEGY.PROMPT
+                                end,
+                                callback = function()
+                                    self:setWhisperBackward(SYNC_STRATEGY.PROMPT)
+                                end,
+                            },
+                            {
+                                text = _("Disable"),
+                                checked_func = function()
+                                    return self.kosync_whisper_backward == SYNC_STRATEGY.DISABLE
+                                end,
+                                callback = function()
+                                    self:setWhisperBackward(SYNC_STRATEGY.DISABLE)
+                                end,
+                            },
+                        }
                     },
                 },
             },
@@ -205,8 +263,10 @@ function KOSync:addToMainMenu(menu_items)
             },
             {
                 text = _("Custom sync server"),
+                keep_menu_open = true,
                 tap_input_func = function()
                     return {
+                        -- @translators Server address defined by user for progress sync.
                         title = _("Custom progress sync server address"),
                         input = self.kosync_custom_server or "https://",
                         type = "text",
@@ -216,12 +276,41 @@ function KOSync:addToMainMenu(menu_items)
                     }
                 end,
             },
+            {
+                text = _("Sync every # pages"),
+                keep_menu_open = true,
+                callback = function()
+                    local SpinWidget = require("ui/widget/spinwidget")
+                    local items = SpinWidget:new{
+                        text = _([[This value determines how many page turns it takes to update book progress.
+If set to 0, updating progress based on page turns will be disabled.]]),
+                        width = math.floor(Screen:getWidth() * 0.6),
+                        value = self.kosync_pages_before_update or 0,
+                        value_min = 0,
+                        value_max = 999,
+                        value_step = 1,
+                        value_hold_step = 10,
+                        ok_text = _("Set"),
+                        title_text = _("Number of pages before update"),
+                        default_value = 0,
+                        callback = function(spin)
+                            self:setPagesBeforeUpdate(spin.value)
+                        end
+                    }
+                    UIManager:show(items)
+                end,
+            },
         }
     }
 end
 
+function KOSync:setPagesBeforeUpdate(pages_before_update)
+    self.kosync_pages_before_update = pages_before_update > 0 and pages_before_update or nil
+    self:saveSettings()
+end
+
 function KOSync:setCustomServer(server)
-    DEBUG("set custom server", server)
+    logger.dbg("set custom server", server)
     self.kosync_custom_server = server ~= "" and server or nil
     self:saveSettings()
 end
@@ -237,9 +326,10 @@ function KOSync:setWhisperBackward(strategy)
 end
 
 function KOSync:login()
-    if not NetworkMgr:isOnline() then
-        NetworkMgr:promptWifiOn()
+    if NetworkMgr:willRerunWhenOnline(function() self:login() end) then
+        return
     end
+
     self.login_dialog = LoginDialog:new{
         title = self.title,
         username = self.kosync_username or "",
@@ -257,15 +347,23 @@ function KOSync:login()
                     enabled = true,
                     callback = function()
                         local username, password = self:getCredential()
-                        self:closeDialog()
-                        UIManager:scheduleIn(0.5, function()
-                            self:doLogin(username, password)
-                        end)
+                        local ok, err = validateUser(username, password)
+                        if not ok then
+                            UIManager:show(InfoMessage:new{
+                                text = T(_("Cannot login: %1"), err),
+                                timeout = 2,
+                            })
+                        else
+                            self:closeDialog()
+                            UIManager:scheduleIn(0.5, function()
+                                self:doLogin(username, password)
+                            end)
 
-                        UIManager:show(InfoMessage:new{
-                            text = _("Logging in. Please wait…"),
-                            timeout = 1,
-                        })
+                            UIManager:show(InfoMessage:new{
+                                text = _("Logging in. Please wait…"),
+                                timeout = 1,
+                            })
+                        end
                     end,
                 },
                 {
@@ -273,25 +371,33 @@ function KOSync:login()
                     enabled = true,
                     callback = function()
                         local username, password = self:getCredential()
-                        self:closeDialog()
-                        UIManager:scheduleIn(0.5, function()
-                            self:doRegister(username, password)
-                        end)
+                        local ok, err = validateUser(username, password)
+                        if not ok then
+                            UIManager:show(InfoMessage:new{
+                                text = T(_("Cannot register: %1"), err),
+                                timeout = 2,
+                            })
+                        else
+                            self:closeDialog()
+                            UIManager:scheduleIn(0.5, function()
+                                self:doRegister(username, password)
+                            end)
 
-                        UIManager:show(InfoMessage:new{
-                            text = _("Registering. Please wait…"),
-                            timeout = 1,
-                        })
+                            UIManager:show(InfoMessage:new{
+                                text = _("Registering. Please wait…"),
+                                timeout = 1,
+                            })
+                        end
                     end,
                 },
             },
         },
-        width = Screen:getWidth() * 0.8,
-        height = Screen:getHeight() * 0.4,
+        width = math.floor(Screen:getWidth() * 0.8),
+        height = math.floor(Screen:getHeight() * 0.4),
     }
 
-    self.login_dialog:onShowKeyboard()
     UIManager:show(self.login_dialog)
+    self.login_dialog:onShowKeyboard()
 end
 
 function KOSync:closeDialog()
@@ -309,7 +415,9 @@ function KOSync:doRegister(username, password)
         custom_url = self.kosync_custom_server,
         service_spec = self.path .. "/api.json"
     }
-    local userkey = md5.sum(password)
+    -- on Android to avoid ANR (no-op on other platforms)
+    Device:setIgnoreInput(true)
+    local userkey = md5(password)
     local ok, status, body = pcall(client.register, client, username, userkey)
     if not ok then
         if status then
@@ -325,15 +433,16 @@ function KOSync:doRegister(username, password)
     elseif status then
         self.kosync_username = username
         self.kosync_userkey = userkey
+        self._menu_to_update:updateItems()
         UIManager:show(InfoMessage:new{
             text = _("Registered to KOReader server."),
         })
     else
         UIManager:show(InfoMessage:new{
-            text = _(body and body.message or "Unknown server error"),
+            text = body and body.message or _("Unknown server error"),
         })
     end
-
+    Device:setIgnoreInput(false)
     self:saveSettings()
 end
 
@@ -343,7 +452,8 @@ function KOSync:doLogin(username, password)
         custom_url = self.kosync_custom_server,
         service_spec = self.path .. "/api.json"
     }
-    local userkey = md5.sum(password)
+    Device:setIgnoreInput(true)
+    local userkey = md5(password)
     local ok, status, body = pcall(client.authorize, client, username, userkey)
     if not ok then
         if status then
@@ -356,33 +466,36 @@ function KOSync:doLogin(username, password)
                 text = _("An unknown error occurred while logging in."),
             })
         end
+        Device:setIgnoreInput(false)
         return
     elseif status then
         self.kosync_username = username
         self.kosync_userkey = userkey
+        self._menu_to_update:updateItems()
         UIManager:show(InfoMessage:new{
             text = _("Logged in to KOReader server."),
         })
     else
         UIManager:show(InfoMessage:new{
-            text = _(body and body.message or "Unknown server error"),
+            text = body and body.message or _("Unknown server error"),
         })
     end
-
+    Device:setIgnoreInput(false)
     self:saveSettings()
 end
 
 function KOSync:logout()
     self.kosync_userkey = nil
     self.kosync_auto_sync = true
+    self._menu_to_update:updateItems()
     self:saveSettings()
 end
 
 function KOSync:getLastPercent()
     if self.ui.document.info.has_pages then
-        return roundPercent(self.ui.paging:getLastPercent())
+        return Math.roundPercent(self.ui.paging:getLastPercent())
     else
-        return roundPercent(self.ui.rolling:getLastPercent())
+        return Math.roundPercent(self.ui.rolling:getLastPercent())
     end
 end
 
@@ -395,7 +508,7 @@ function KOSync:getLastProgress()
 end
 
 function KOSync:syncToProgress(progress)
-    DEBUG("sync to", progress)
+    logger.dbg("sync to", progress)
     if self.ui.document.info.has_pages then
         self.ui:handleEvent(Event:new("GotoPage", tonumber(progress)))
     else
@@ -408,6 +521,10 @@ function KOSync:updateProgress(manual)
         if manual then
             promptLogin()
         end
+        return
+    end
+
+    if manual and NetworkMgr:willRerunWhenOnline(function() self:updateProgress(manual) end) then
         return
     end
 
@@ -426,10 +543,10 @@ function KOSync:updateProgress(manual)
         doc_digest,
         progress,
         percentage,
-        DeviceModel,
+        Device.model,
         self.kosync_device_id,
         function(ok, body)
-            DEBUG("update progress for", self.view.document.file, ok)
+            logger.dbg("update progress for", self.view.document.file, ok)
             if manual then
                 if ok then
                     UIManager:show(InfoMessage:new{
@@ -443,7 +560,7 @@ function KOSync:updateProgress(manual)
         end)
     if not ok then
         if manual then showSyncError() end
-        if err then DEBUG("err:", err) end
+        if err then logger.dbg("err:", err) end
     end
 end
 
@@ -452,6 +569,10 @@ function KOSync:getProgress(manual)
         if manual then
             promptLogin()
         end
+        return
+    end
+
+    if manual and NetworkMgr:willRerunWhenOnline(function() self:getProgress(manual) end) then
         return
     end
 
@@ -467,7 +588,7 @@ function KOSync:getProgress(manual)
         self.kosync_userkey,
         doc_digest,
         function(ok, body)
-            DEBUG("get progress for", self.view.document.file, ok, body)
+            logger.dbg("get progress for", self.view.document.file, ok, body)
             if not ok or not body then
                 if manual then
                     showSyncError()
@@ -485,7 +606,7 @@ function KOSync:getProgress(manual)
                 return
             end
 
-            if body.device == DeviceModel
+            if body.device == Device.model
             and body.device_id == self.kosync_device_id then
                 if manual then
                     UIManager:show(InfoMessage:new{
@@ -496,10 +617,10 @@ function KOSync:getProgress(manual)
                 return
             end
 
-            body.percentage = roundPercent(body.percentage)
+            body.percentage = Math.roundPercent(body.percentage)
             local progress = self:getLastProgress()
             local percentage = self:getLastPercent()
-            DEBUG("current progress", percentage)
+            logger.dbg("current progress", percentage)
 
             if percentage == body.percentage
             or body.progress == progress then
@@ -561,7 +682,7 @@ function KOSync:getProgress(manual)
         end)
     if not ok then
         if manual then showSyncError() end
-        if err then DEBUG("err:", err) end
+        if err then logger.dbg("err:", err) end
     end
 end
 
@@ -571,20 +692,21 @@ function KOSync:saveSettings()
         username = self.kosync_username,
         userkey = self.kosync_userkey,
         auto_sync = self.kosync_auto_sync,
+        pages_before_update = self.kosync_pages_before_update,
         whisper_forward =
-              (self.kosync_whisper_forward == SYNC_STRATEGY.DEFAULT_FORWARD
-               and nil
-               or self.kosync_whisper_forward),
+              (self.kosync_whisper_forward ~= SYNC_STRATEGY.DEFAULT_FORWARD
+               and self.kosync_whisper_forward
+               or nil),
         whisper_backward =
-              (self.kosync_whisper_backward == SYNC_STRATEGY.DEFAULT_BACKWARD
-               and nil
-               or self.kosync_whisper_backward),
+              (self.kosync_whisper_backward ~= SYNC_STRATEGY.DEFAULT_BACKWARD
+               and self.kosync_whisper_backward
+               or nil),
     }
     G_reader_settings:saveSetting("kosync", settings)
 end
 
 function KOSync:onCloseDocument()
-    DEBUG("on close document")
+    logger.dbg("on close document")
     if self.kosync_auto_sync then
         self:updateProgress()
     end
@@ -601,9 +723,7 @@ function KOSync:_onPageUpdate(page)
         self.last_page = page
         self.last_page_turn_ticks = os.time()
         self.page_update_times = self.page_update_times + 1
-        if DAUTO_SAVE_PAGING_COUNT ~= nil
-        and (DAUTO_SAVE_PAGING_COUNT <= 0
-             or self.page_update_times == DAUTO_SAVE_PAGING_COUNT) then
+        if self.kosync_pages_before_update and self.page_update_times == self.kosync_pages_before_update then
             self.page_update_times = 0
             UIManager:scheduleIn(1, function() self:updateProgress() end)
         end
@@ -621,6 +741,16 @@ end
 
 function KOSync:_onNetworkConnected()
     self:_onResume()
+end
+
+function KOSync:onKOSyncPushProgress()
+    if not self.kosync_userkey then return end
+    self:updateProgress(true)
+end
+
+function KOSync:onKOSyncPullProgress()
+    if not self.kosync_userkey then return end
+    self:getProgress(true)
 end
 
 function KOSync:registerEvents()

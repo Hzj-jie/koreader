@@ -1,31 +1,36 @@
-local ConfirmBox = require("ui/widget/confirmbox")
+local BD = require("ui/bidi")
 local Device = require("device")
+local Event = require("ui/event")
 local InfoMessage = require("ui/widget/infomessage")
 local UIManager = require("ui/uimanager")
+local Version = require("version")
 local _ = require("gettext")
 local T = require("ffi/util").template
 
 local common_info = {}
 
-if Device:isKindle() or Device:isKobo() or Device:isPocketBook()
-    or Device:isAndroid() then
+if Device:hasOTAUpdates() then
     local OTAManager = require("ui/otamanager")
     common_info.ota_update = OTAManager:getOTAMenuTable()
 end
-local version = require("version"):getCurrentRevision()
 common_info.version = {
-    text = _("Version"),
+    text = T(_("Version: %1"), Version:getShortVersion()),
+    keep_menu_open = true,
     callback = function()
         UIManager:show(InfoMessage:new{
-            text = version,
+            text = Version:getCurrentRevision(),
         })
     end
 }
 common_info.help = {
     text = _("Help"),
 }
-common_info.more_plugins = {
-    text = _("More plugins"),
+common_info.more_tools = {
+    text = _("More tools"),
+}
+
+common_info.device = {
+    text = _("Device"),
 }
 common_info.quickstart_guide = {
     text = _("Quickstart guide"),
@@ -37,24 +42,26 @@ common_info.quickstart_guide = {
 }
 common_info.about = {
     text = _("About"),
+    keep_menu_open = true,
     callback = function()
         UIManager:show(InfoMessage:new{
-            text = T(_("KOReader %1\n\nA document viewer for E Ink devices.\n\nLicensed under Affero GPL v3. All dependencies are free software.\n\nhttp://koreader.rocks/"), version),
+            text = T(_("KOReader %1\n\nA document viewer for E Ink devices.\n\nLicensed under Affero GPL v3. All dependencies are free software.\n\nhttp://koreader.rocks"), BD.ltr(Version:getCurrentRevision())),
+            icon = "koreader",
         })
     end
 }
 common_info.report_bug = {
     text = _("Report a bug"),
+    keep_menu_open = true,
     callback = function()
-        local model = Device.model
         UIManager:show(InfoMessage:new{
             text = T(_("Please report bugs to \nhttps://github.com/koreader/koreader/issues\n\nVersion:\n%1\n\nDetected device:\n%2"),
-                version, model),
+                Version:getCurrentRevision(), Device:info()),
         })
     end
 }
 
-if Device:isKindle() or Device:isKobo() then
+if Device:canSuspend() then
     common_info.sleep = {
         text = _("Sleep"),
         callback = function()
@@ -62,29 +69,21 @@ if Device:isKindle() or Device:isKobo() then
         end,
     }
 end
-if Device:isKobo() then
+if Device:canReboot() then
     common_info.reboot = {
         text = _("Reboot the device"),
+        keep_menu_open = true,
         callback = function()
-            UIManager:show(ConfirmBox:new{
-                text = _("Are you sure you want to reboot the device?"),
-                ok_text = _("Reboot"),
-                ok_callback = function()
-                    UIManager:nextTick(UIManager.reboot_action)
-                end,
-            })
+            UIManager:broadcastEvent(Event:new("Reboot"))
         end
     }
+end
+if Device:canPowerOff() then
     common_info.poweroff = {
         text = _("Power off"),
+        keep_menu_open = true,
         callback = function()
-            UIManager:show(ConfirmBox:new{
-                text = _("Are you sure you want to power off the device?"),
-                ok_text = _("Power off"),
-                ok_callback = function()
-                    UIManager:nextTick(UIManager.poweroff_action)
-                end,
-            })
+            UIManager:broadcastEvent(Event:new("PowerOff"))
         end
     }
 end

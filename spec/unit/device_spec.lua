@@ -20,6 +20,7 @@ describe("device module", function()
         }
         require("commonrequire")
         package.unloadAll()
+        require("document/canvascontext"):init(require("device"))
     end)
 
     before_each(function()
@@ -71,7 +72,7 @@ describe("device module", function()
                 if key == "PRODUCT" then
                     return "trilogy"
                 else
-                    return saved_getenv(key)
+                    return osgetenv(key)
                 end
             end)
 
@@ -80,7 +81,6 @@ describe("device module", function()
             kobo_dev:init()
             local Screen = kobo_dev.screen
 
-            kobo_dev.touch_probe_ev_epoch_time = false
             assert.is.same("Kobo_trilogy", kobo_dev.model)
             assert.truthy(kobo_dev:needsTouchScreenProbe())
             G_reader_settings:saveSetting("kobo_touch_switch_xy", true)
@@ -94,11 +94,13 @@ describe("device module", function()
                 type = EV_ABS,
                 code = ABS_X,
                 value = y,
+                time = TimeVal:now(),
             }
             local ev_y = {
                 type = EV_ABS,
                 code = ABS_Y,
                 value = Screen:getWidth()-x,
+                time = TimeVal:now(),
             }
 
             kobo_dev.input:eventAdjustHook(ev_x)
@@ -110,50 +112,55 @@ describe("device module", function()
 
             -- reset eventAdjustHook
             kobo_dev.input.eventAdjustHook = function() end
-            kobo_dev.touch_probe_ev_epoch_time = true
         end)
 
         it("should setup eventAdjustHooks properly for trilogy with non-epoch ev time", function()
+            -- This has no more value since #6798 as ev time can now stay
+            -- non-epoch. Adjustments are made on first event handled, and
+            -- have only effects when handling long-press (so, the long-press
+            -- for dict lookup tests with test this).
+            -- We just check here it still works with non-epoch ev time, as previous test
             os.getenv.invokes(function(key)
                 if key == "PRODUCT" then
                     return "trilogy"
                 else
-                    return saved_getenv(key)
+                    return osgetenv(key)
                 end
             end)
+
+            package.loaded['device/kobo/device'] = nil
             local kobo_dev = require("device/kobo/device")
             kobo_dev:init()
             local Screen = kobo_dev.screen
 
             assert.is.same("Kobo_trilogy", kobo_dev.model)
+            assert.truthy(kobo_dev:needsTouchScreenProbe())
+            kobo_dev:touchScreenProbe()
             local x, y = Screen:getWidth()-5, 10
             local EV_ABS = 3
             local ABS_X = 00
             local ABS_Y = 01
-            -- mirror x, then switch_xy
             local ev_x = {
                 type = EV_ABS,
                 code = ABS_X,
-                value = x,
+                value = y,
                 time = {sec = 1000}
             }
             local ev_y = {
                 type = EV_ABS,
                 code = ABS_Y,
-                value = y,
+                value = Screen:getWidth()-x,
                 time = {sec = 1000}
             }
 
-            assert.truthy(kobo_dev.touch_probe_ev_epoch_time)
-            G_reader_settings:saveSetting("kobo_touch_switch_xy", true)
-            kobo_dev:touchScreenProbe()
-
             kobo_dev.input:eventAdjustHook(ev_x)
             kobo_dev.input:eventAdjustHook(ev_y)
-            local cur_sec = TimeVal:now().sec
-            assert.truthy(cur_sec - ev_x.time.sec < 10)
-            assert.truthy(cur_sec - ev_y.time.sec < 10)
+            assert.is.same(x, ev_y.value)
+            assert.is.same(ABS_X, ev_y.code)
+            assert.is.same(y, ev_x.value)
+            assert.is.same(ABS_Y, ev_x.code)
 
+            -- reset eventAdjustHook
             kobo_dev.input.eventAdjustHook = function() end
         end)
 
@@ -193,7 +200,7 @@ describe("device module", function()
             io.open = function(filename, mode)
                 if filename == "/proc/usid" then
                     return {
-                        read = function() return "XX13XX" end,
+                        read = function() return "B013XX" end,
                         close = function() end
                     }
                 else
@@ -207,19 +214,20 @@ describe("device module", function()
             assert.is.same(kindle_dev.input.event_map[104], "LPgBack")
             assert.is.same(kindle_dev.input.event_map[109], "LPgFwd")
             assert.is.same(kindle_dev.powerd.fl_min, 0)
-            assert.is.same(kindle_dev.powerd.fl_max, 24)
+            -- NOTE: fl_max + 1 since #5989
+            assert.is.same(kindle_dev.powerd.fl_max, 25)
         end)
 
         it("should toggle frontlight", function()
             io.open = function(filename, mode)
                 if filename == "/proc/usid" then
                     return {
-                        read = function() return "XX13XX" end,
+                        read = function() return "B013XX" end,
                         close = function() end
                     }
                 elseif filename == "/sys/class/backlight/max77696-bl/brightness" then
                     return {
-                        read = function() return "12" end,
+                        read = function() return 12 end,
                         close = function() end
                     }
                 else
@@ -232,18 +240,20 @@ describe("device module", function()
 
             assert.is.same(kindle_dev.powerd.fl_intensity, 12)
             kindle_dev.powerd:setIntensity(5)
-            assert.stub(os.execute).was_called_with(
-                "echo -n 5 > /sys/class/backlight/max77696-bl/brightness")
             assert.is.same(kindle_dev.powerd.fl_intensity, 5)
 
             kindle_dev.powerd:toggleFrontlight()
             assert.stub(os.execute).was_called_with(
                 "echo -n 0 > /sys/class/backlight/max77696-bl/brightness")
+            -- Here be shenanigans: we don't override powerd's fl_intensity when we turn the light off,
+            -- so that we can properly turn it back on at the previous intensity ;)
             assert.is.same(kindle_dev.powerd.fl_intensity, 5)
+            -- But if we were to cat /sys/class/backlight/max77696-bl/brightness, it should now be 0.
 
             kindle_dev.powerd:toggleFrontlight()
-            assert.stub(os.execute).was_called_with(
-                "echo -n 5 > /sys/class/backlight/max77696-bl/brightness")
+            assert.is.same(kindle_dev.powerd.fl_intensity, 5)
+            -- And /sys/class/backlight/max77696-bl/brightness is now !0
+            -- (exact value is HW-dependent, each model has a different curve, we let lipc do the work for us).
         end)
 
         it("oasis should interpret orientation event", function()
@@ -252,7 +262,7 @@ describe("device module", function()
                 if filename == "/proc/usid" then
                     return {
                         read = function()
-                            return "XXX0GCXXX"
+                            return "G0B0GCXXX"
                         end,
                         close = function() end
                     }
@@ -279,6 +289,7 @@ describe("device module", function()
             local kindle_dev = require('device/kindle/device')
             assert.is.same("KindleOasis", kindle_dev.model)
             kindle_dev:init()
+            kindle_dev:lockGSensor(true)
 
             kindle_dev.input:waitEvent()
             assert.stub(UIManager.onRotation).was_called()

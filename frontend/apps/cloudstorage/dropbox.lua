@@ -1,35 +1,58 @@
-local DropBoxApi = require("apps/cloudstorage/dropboxapi")
+local BD = require("ui/bidi")
 local ConfirmBox = require("ui/widget/confirmbox")
+local DocumentRegistry = require("document/documentregistry")
+local DropBoxApi = require("apps/cloudstorage/dropboxapi")
 local InfoMessage = require("ui/widget/infomessage")
 local MultiInputDialog = require("ui/widget/multiinputdialog")
 local UIManager = require("ui/uimanager")
 local ReaderUI = require("apps/reader/readerui")
+local util = require("util")
 local Screen = require("device").screen
 local T = require("ffi/util").template
 local _ = require("gettext")
 
 local DropBox = {}
 
-function DropBox:run(url, password)
-    return DropBoxApi:listFolder(url, password)
+function DropBox:run(url, password, choose_folder_mode)
+    return DropBoxApi:listFolder(url, password, choose_folder_mode)
+end
+
+function DropBox:showFiles(url, password)
+    return DropBoxApi:showFiles(url, password)
 end
 
 function DropBox:downloadFile(item, password, path, close)
     local code_response = DropBoxApi:downloadFile(item.url, password, path)
     if code_response == 200 then
-        UIManager:show(ConfirmBox:new{
-            text = T(_("File saved to:\n %1\nWould you like to read the downloaded book now?"),
-                path),
-            ok_callback = function()
-                close()
-                ReaderUI:showReader(path)
-            end
-        })
+        local __, filename = util.splitFilePathName(path)
+        if G_reader_settings:isTrue("show_unsupported") and not DocumentRegistry:hasProvider(filename) then
+            UIManager:show(InfoMessage:new{
+                text = T(_("File saved to:\n%1"), BD.filename(path)),
+            })
+        else
+            UIManager:show(ConfirmBox:new{
+                text = T(_("File saved to:\n%1\nWould you like to read the downloaded book now?"),
+                    BD.filepath(path)),
+                ok_callback = function()
+                    close()
+                    ReaderUI:showReader(path)
+                end
+            })
+        end
     else
         UIManager:show(InfoMessage:new{
-            text = T(_("Could not save file to:\n%1"), path),
+            text = T(_("Could not save file to:\n%1"), BD.filepath(path)),
             timeout = 3,
         })
+    end
+end
+
+function DropBox:downloadFileNoUI(url, password, path)
+    local code_response = DropBoxApi:downloadFile(url, password, path)
+    if code_response == 200 then
+        return true
+    else
+        return false
     end
 end
 
@@ -44,7 +67,7 @@ function DropBox:config(item, callback)
         "7. Under the 'Generated access token' section, then enter code in Dropbox token field."
     local hint_top = _("Your Dropbox name")
     local text_top = ""
-    local hint_bottom = _("Dropbox token\n\n\n\n ")
+    local hint_bottom = _("Dropbox token\n\n\n\n")
     local text_bottom = ""
     local title
     local text_button_right = _("Add")
@@ -107,19 +130,19 @@ function DropBox:config(item, callback)
                 },
             },
         },
-        width = Screen:getWidth() * 0.95,
-        height = Screen:getHeight() * 0.2,
+        width = math.floor(Screen:getWidth() * 0.95),
+        height = math.floor(Screen:getHeight() * 0.2),
         input_type = "text",
     }
-    self.settings_dialog:onShowKeyboard()
     UIManager:show(self.settings_dialog)
+    self.settings_dialog:onShowKeyboard()
 end
 
 function DropBox:info(token)
     local info = DropBoxApi:fetchInfo(token)
     local info_text
     if info and info.name then
-        info_text = T(_"Type: %1\nName: %2\nEmail: %3\nCounty: %4",
+        info_text = T(_"Type: %1\nName: %2\nEmail: %3\nCountry: %4",
             "Dropbox",info.name.display_name, info.email, info.country)
     else
         info_text = _("No information available")

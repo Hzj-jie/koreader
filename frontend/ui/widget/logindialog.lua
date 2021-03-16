@@ -28,7 +28,7 @@ function LoginDialog:init()
         text = self.username,
         hint = self.username_hint,
         face = self.input_face,
-        width = self.width * 0.9,
+        width = math.floor(self.width * 0.9),
         focused = true,
         scroll = false,
         parent = self,
@@ -38,7 +38,7 @@ function LoginDialog:init()
         text = self.password,
         hint = self.password_hint,
         face = self.input_face,
-        width = self.width * 0.9,
+        width = math.floor(self.width * 0.9),
         text_type = "password",
         focused = false,
         scroll = false,
@@ -52,7 +52,7 @@ function LoginDialog:init()
         background = Blitbuffer.COLOR_WHITE,
         VerticalGroup:new{
             align = "left",
-            self.title,
+            self.title_widget,
             self.title_bar,
             -- username input
             CenterContainer:new{
@@ -102,13 +102,11 @@ function LoginDialog:onSwitchFocus(inputbox)
     -- unfocus current inputbox
     self._input_widget:unfocus()
     self._input_widget:onCloseKeyboard()
-
     -- focus new inputbox
     self._input_widget = inputbox
     self._input_widget:focus()
     self._input_widget:onShowKeyboard()
-
-    UIManager:show(self)
+    UIManager:setDirty(self, "ui")
 end
 
 return LoginDialog

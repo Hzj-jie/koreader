@@ -1,3 +1,4 @@
+local BD = require("ui/bidi")
 local CenterContainer = require("ui/widget/container/centercontainer")
 local ConfirmBox = require("ui/widget/confirmbox")
 local Device = require("device")
@@ -18,6 +19,7 @@ local T = require("ffi/util").template
 local ReaderBookmark = InputContainer:new{
     bm_menu_title = _("Bookmarks"),
     bbm_menu_title = _("Bookmark browsing mode"),
+    bookmarks_items_per_page_default = 14,
     bookmarks = nil,
 }
 
@@ -29,21 +31,21 @@ function ReaderBookmark:init()
                 doc = "show bookmarks" },
         }
     end
-    if Device:isTouchDevice() then
-        self.ges_events = {
-            ShowBookmark = {
-                GestureRange:new{
-                    ges = "two_finger_swipe",
-                    range = Geom:new{
-                        x = 0, y = 0,
-                        w = Screen:getWidth(),
-                        h = Screen:getHeight(),
-                    },
-                    direction = "west"
-                }
-            },
-        }
+
+    if G_reader_settings:hasNot("bookmarks_items_per_page") then
+        -- The Bookmarks items per page and items' font size can now be
+        -- configured. Previously, the ones set for the file browser
+        -- were used. Initialize them from these ones.
+        local items_per_page = G_reader_settings:readSetting("items_per_page")
+                            or self.bookmarks_items_per_page_default
+        G_reader_settings:saveSetting("bookmarks_items_per_page", items_per_page)
+        local items_font_size = G_reader_settings:readSetting("items_font_size")
+        if items_font_size and items_font_size ~= Menu.getItemFontSize(items_per_page) then
+            -- Keep the user items font size if it's not the default for items_per_page
+            G_reader_settings:saveSetting("bookmarks_items_font_size", items_font_size)
+        end
     end
+
     self.ui.menu:registerToMainMenu(self)
 end
 
@@ -55,16 +57,76 @@ function ReaderBookmark:addToMainMenu(menu_items)
             self:onShowBookmark()
         end,
     }
+    if not Device:isTouchDevice() then
+        menu_items.toggle_bookmark = {
+            text_func = function() return self:isCurrentPageBookmarked() and _("Remove bookmark for current page") or _("Bookmark current page") end,
+            callback = function()
+                self:onToggleBookmark()
+            end,
+       }
+    end
     if self.ui.document.info.has_pages then
         menu_items.bookmark_browsing_mode = {
             text = self.bbm_menu_title,
-            checked_func = function() return self.view.flipping_visible end,
+            checked_func = function() return self.ui.paging.bookmark_flipping_mode end,
             callback = function(touchmenu_instance)
                 self:enableBookmarkBrowsingMode()
                 touchmenu_instance:closeMenu()
             end,
         }
     end
+    menu_items.bookmarks_items_per_page = {
+        text = _("Bookmarks per page"),
+        keep_menu_open = true,
+        callback = function()
+            local SpinWidget = require("ui/widget/spinwidget")
+            local curr_perpage = G_reader_settings:readSetting("bookmarks_items_per_page") or self.bookmarks_items_per_page_default
+            local items = SpinWidget:new{
+                width = math.floor(Screen:getWidth() * 0.6),
+                value = curr_perpage,
+                value_min = 6,
+                value_max = 24,
+                default_value = self.bookmarks_items_per_page_default,
+                title_text =  _("Bookmarks per page"),
+                callback = function(spin)
+                    G_reader_settings:saveSetting("bookmarks_items_per_page", spin.value)
+                end
+            }
+            UIManager:show(items)
+        end
+    }
+    menu_items.bookmarks_items_font_size = {
+        text = _("Bookmark font size"),
+        keep_menu_open = true,
+        callback = function()
+            local SpinWidget = require("ui/widget/spinwidget")
+            local curr_perpage = G_reader_settings:readSetting("bookmarks_items_per_page") or self.bookmarks_items_per_page_default
+            local default_font_size = Menu.getItemFontSize(curr_perpage)
+            local curr_font_size = G_reader_settings:readSetting("bookmarks_items_font_size") or default_font_size
+            local items_font = SpinWidget:new{
+                width = math.floor(Screen:getWidth() * 0.6),
+                value = curr_font_size,
+                value_min = 10,
+                value_max = 72,
+                default_value = default_font_size,
+                title_text =  _("Bookmark font size"),
+                callback = function(spin)
+                    G_reader_settings:saveSetting("bookmarks_items_font_size", spin.value)
+                end
+            }
+            UIManager:show(items_font)
+        end,
+    }
+    menu_items.bookmarks_items_show_more_text = {
+        text = _("Shrink bookmark font size to fit more text"),
+        keep_menu_open = true,
+        checked_func = function()
+            return G_reader_settings:isTrue("bookmarks_items_multilines_show_more_text")
+        end,
+        callback = function()
+            G_reader_settings:flipNilOrFalse("bookmarks_items_multilines_show_more_text")
+        end
+    }
 end
 
 function ReaderBookmark:enableBookmarkBrowsingMode()
@@ -77,19 +139,31 @@ end
 
 function ReaderBookmark:isBookmarkInPageOrder(a, b)
     if self.ui.document.info.has_pages then
+        if a.page == b.page then -- have bookmarks before highlights
+            return a.highlighted
+        end
         return a.page > b.page
     else
-        return self.ui.document:getPageFromXPointer(a.page) >
-                self.ui.document:getPageFromXPointer(b.page)
+        local a_page = self.ui.document:getPageFromXPointer(a.page)
+        local b_page = self.ui.document:getPageFromXPointer(b.page)
+        if a_page == b_page then -- have bookmarks before highlights
+            return a.highlighted
+        end
+        return a_page > b_page
     end
 end
 
 function ReaderBookmark:isBookmarkInReversePageOrder(a, b)
+    -- The way this is used (by getNextBookmarkedPage(), iterating bookmarks
+    -- in reverse order), we want to skip highlights, but also the current
+    -- page: so we do not do any "a.page == b.page" check (not even with
+    -- a reverse logic than the one from above function).
     if self.ui.document.info.has_pages then
         return a.page < b.page
     else
-        return self.ui.document:getPageFromXPointer(a.page) <
-                self.ui.document:getPageFromXPointer(b.page)
+        local a_page = self.ui.document:getPageFromXPointer(a.page)
+        local b_page = self.ui.document:getPageFromXPointer(b.page)
+        return a_page < b_page
     end
 end
 
@@ -112,7 +186,7 @@ end
 function ReaderBookmark:fixBookmarkSort(config)
     -- for backward compatibility, since previously bookmarks for credocuments
     -- are not well sorted. We need to do a whole sorting for at least once.
-    if not config:readSetting("bookmarks_sorted") then
+    if config:hasNot("bookmarks_sorted") then
         table.sort(self.bookmarks, function(a, b)
             return self:isBookmarkInPageOrder(a, b)
         end)
@@ -123,7 +197,7 @@ function ReaderBookmark:importSavedHighlight(config)
     local textmarks = config:readSetting("highlight") or {}
     -- import saved highlight once, because from now on highlight are added to
     -- bookmarks when they are created.
-    if not config:readSetting("highlights_imported") then
+    if config:hasNot("highlights_imported") then
         for page, marks in pairs(textmarks) do
             for _, mark in ipairs(marks) do
                 page = self.ui.document.info.has_pages and page or mark.pos0
@@ -154,8 +228,18 @@ end
 
 function ReaderBookmark:onSaveSettings()
     self.ui.doc_settings:saveSetting("bookmarks", self.bookmarks)
-    self.ui.doc_settings:saveSetting("bookmarks_sorted", true)
-    self.ui.doc_settings:saveSetting("highlights_imported", true)
+    self.ui.doc_settings:makeTrue("bookmarks_sorted")
+    self.ui.doc_settings:makeTrue("highlights_imported")
+end
+
+function ReaderBookmark:isCurrentPageBookmarked()
+    local pn_or_xp
+    if self.ui.document.info.has_pages then
+        pn_or_xp = self.view.state.page
+    else
+        pn_or_xp = self.ui.document:getXPointer()
+    end
+    return self:getDogearBookmarkIndex(pn_or_xp) and true or false
 end
 
 function ReaderBookmark:onToggleBookmark()
@@ -166,6 +250,7 @@ function ReaderBookmark:onToggleBookmark()
         pn_or_xp = self.ui.document:getXPointer()
     end
     self:toggleBookmark(pn_or_xp)
+    self.view.footer:onUpdateFooter(self.view.footer_visible)
     self.ui:handleEvent(Event:new("SetDogearVisibility",
                                   not self.view.dogear_visible))
     UIManager:setDirty(self.view.dialog, "ui")
@@ -192,23 +277,71 @@ function ReaderBookmark:onPosUpdate(pos)
     self:setDogearVisibility(self.ui.document:getXPointer())
 end
 
-function ReaderBookmark:gotoBookmark(pn_or_xp)
-    local event = self.ui.document.info.has_pages and "GotoPage" or "GotoXPointer"
-    self.ui:handleEvent(Event:new(event, pn_or_xp))
+function ReaderBookmark:gotoBookmark(pn_or_xp, marker_xp)
+    if pn_or_xp then
+        local event = self.ui.document.info.has_pages and "GotoPage" or "GotoXPointer"
+        self.ui:handleEvent(Event:new(event, pn_or_xp, marker_xp))
+    end
+end
+
+-- This function adds "chapter" property to highlights already saved in the document
+function ReaderBookmark:updateHighlightsIfNeeded()
+    local version = self.ui.doc_settings:readSetting("bookmarks_version") or 0
+    if version >= 20200615 then
+        return
+    end
+
+    for page, highlights in pairs(self.view.highlight.saved) do
+        for _, highlight in pairs(highlights) do
+            local pg_or_xp = self.ui.document.info.has_pages and
+                    page or highlight.pos0
+            local chapter_name = self.ui.toc:getTocTitleByPage(pg_or_xp)
+            highlight.chapter = chapter_name
+        end
+    end
+
+    for _, bookmark in ipairs(self.bookmarks) do
+        if bookmark.pos0 then
+            local pg_or_xp = self.ui.document.info.has_pages and
+                    bookmark.page or bookmark.pos0
+                local chapter_name = self.ui.toc:getTocTitleByPage(pg_or_xp)
+            bookmark.chapter = chapter_name
+        elseif bookmark.page then -- dogear bookmark
+            local chapter_name = self.ui.toc:getTocTitleByPage(bookmark.page)
+            bookmark.chapter = chapter_name
+        end
+    end
+    self.ui.doc_settings:saveSetting("bookmarks_version", 20200615)
 end
 
 function ReaderBookmark:onShowBookmark()
+    self:updateHighlightsIfNeeded()
     -- build up item_table
     for k, v in ipairs(self.bookmarks) do
         local page = v.page
         -- for CREngine, bookmark page is xpointer
         if not self.ui.document.info.has_pages then
-            page = self.ui.document:getPageFromXPointer(page)
+            if self.ui.pagemap and self.ui.pagemap:wantsPageLabels() then
+                page = self.ui.pagemap:getXPointerPageLabel(page, true)
+            else
+                page = self.ui.document:getPageFromXPointer(page)
+                if self.ui.document:hasHiddenFlows() then
+                    local flow = self.ui.document:getPageFlow(page)
+                    page = self.ui.document:getPageNumberInFlow(page)
+                    if flow > 0 then
+                        page = T("[%1]%2", page, flow)
+                    end
+                end
+            end
         end
         if v.text == nil or v.text == "" then
             v.text = T(_("Page %1 %2 @ %3"), page, v.notes, v.datetime)
         end
     end
+
+    local items_per_page = G_reader_settings:readSetting("bookmarks_items_per_page") or self.bookmarks_items_per_page_default
+    local items_font_size = G_reader_settings:readSetting("bookmarks_items_font_size") or Menu.getItemFontSize(items_per_page)
+    local multilines_show_more_text = G_reader_settings:isTrue("bookmarks_items_multilines_show_more_text")
 
     local bm_menu = Menu:new{
         title = _("Bookmarks"),
@@ -218,7 +351,9 @@ function ReaderBookmark:onShowBookmark()
         width = Screen:getWidth(),
         height = Screen:getHeight(),
         cface = Font:getFace("x_smallinfofont"),
-        perpage = G_reader_settings:readSetting("items_per_page") or 14,
+        items_per_page = items_per_page,
+        items_font_size = items_font_size,
+        multilines_show_more_text = multilines_show_more_text,
         line_color = require("ffi/blitbuffer").COLOR_WHITE,
         on_close_ges = {
             GestureRange:new{
@@ -228,20 +363,22 @@ function ReaderBookmark:onShowBookmark()
                     w = Screen:getWidth(),
                     h = Screen:getHeight(),
                 },
-                direction = "east"
+                direction = BD.flipDirectionIfMirroredUILayout("east")
             }
         }
     }
 
     self.bookmark_menu = CenterContainer:new{
         dimen = Screen:getSize(),
+        covers_fullscreen = true, -- hint for UIManager:_repaint()
         bm_menu,
     }
 
     -- buid up menu widget method as closure
     local bookmark = self
     function bm_menu:onMenuChoice(item)
-        bookmark:gotoBookmark(item.page)
+        bookmark.ui.link:addCurrentLocationToStack()
+        bookmark:gotoBookmark(item.page, item.pos0)
     end
 
     function bm_menu:onMenuHold(item)
@@ -263,7 +400,7 @@ function ReaderBookmark:onShowBookmark()
                         text = _("Remove this bookmark"),
                         callback = function()
                             UIManager:show(ConfirmBox:new{
-                                text = _("Do you want remove this bookmark?"),
+                                text = _("Remove this bookmark?"),
                                 cancel_text = _("Cancel"),
                                 cancel_callback = function()
                                     return
@@ -286,7 +423,7 @@ function ReaderBookmark:onShowBookmark()
                             UIManager:close(self.textviewer)
                         end,
                     },
-                }
+                },
             }
         }
         UIManager:show(self.textviewer)
@@ -323,12 +460,8 @@ function ReaderBookmark:getDogearBookmarkIndex(pn_or_xp)
     while _start <= _end do
         _middle = math.floor((_start + _end)/2)
         local v = self.bookmarks[_middle]
-        if self:isBookmarkMatch(v, pn_or_xp) then
-            if v.highlighted then
-                return
-            else
-                return _middle
-            end
+        if not v.highlighted and self:isBookmarkMatch(v, pn_or_xp) then
+            return _middle
         elseif self:isBookmarkInPageOrder({page = pn_or_xp}, v) then
             _end = _middle - 1
         else
@@ -340,7 +473,8 @@ end
 function ReaderBookmark:isBookmarkSame(item1, item2)
     if item1.notes ~= item2.notes then return false end
     if self.ui.document.info.has_pages then
-        return item2.pos0 and item2.pos1 and item1.pos0.page == item2.pos0.page
+        return item1.pos0 and item1.pos1 and item2.pos0 and item2.pos1
+        and item1.pos0.page == item2.pos0.page
         and item1.pos0.x == item2.pos0.x and item1.pos0.y == item2.pos0.y
         and item1.pos1.x == item2.pos1.x and item1.pos1.y == item2.pos1.y
     else
@@ -366,6 +500,7 @@ function ReaderBookmark:addBookmark(item)
         end
     end
     table.insert(self.bookmarks, _middle + direction, item)
+    self.view.footer:onUpdateFooter(self.view.footer_visible)
 end
 
 -- binary search of sorted bookmarks
@@ -391,6 +526,12 @@ function ReaderBookmark:removeHighlight(item)
         self.ui:handleEvent(Event:new("Unhighlight", item))
     else
         self:removeBookmark(item)
+        -- Update dogear in case we removed a bookmark for current page
+        if self.ui.document.info.has_pages then
+            self:setDogearVisibility(self.view.state.page)
+        else
+            self:setDogearVisibility(self.ui.document:getXPointer())
+        end
     end
 end
 
@@ -402,7 +543,9 @@ function ReaderBookmark:removeBookmark(item)
         _middle = math.floor((_start + _end)/2)
         local v = self.bookmarks[_middle]
         if item.datetime == v.datetime and item.page == v.page then
-            return table.remove(self.bookmarks, _middle)
+            table.remove(self.bookmarks, _middle)
+            self.view.footer:onUpdateFooter(self.view.footer_visible)
+            return
         elseif self:isBookmarkInPageOrder(item, v) then
             _end = _middle - 1
         else
@@ -417,10 +560,38 @@ function ReaderBookmark:removeBookmark(item)
     for i=1, #self.bookmarks do
         local v = self.bookmarks[i]
         if item.datetime == v.datetime and item.page == v.page then
-            return table.remove(self.bookmarks, i)
+            table.remove(self.bookmarks, i)
+            self.view.footer:onUpdateFooter(self.view.footer_visible)
+            return
         end
     end
     logger.warn("removeBookmark: full scan search didn't find bookmark")
+end
+
+function ReaderBookmark:updateBookmark(item)
+    for i=1, #self.bookmarks do
+        if item.datetime == self.bookmarks[i].datetime and item.page == self.bookmarks[i].page then
+            local page = self.ui.document:getPageFromXPointer(item.updated_highlight.pos0)
+            if self.ui.document:hasHiddenFlows() then
+                local flow = self.ui.document:getPageFlow(page)
+                page = self.ui.document:getPageNumberInFlow(page)
+                if flow > 0 then
+                    page = T("[%1]%2", page, flow)
+                end
+            end
+            local new_text = item.updated_highlight.text
+            self.bookmarks[i].page = item.updated_highlight.pos0
+            self.bookmarks[i].pos0 = item.updated_highlight.pos0
+            self.bookmarks[i].pos1 = item.updated_highlight.pos1
+            self.bookmarks[i].notes = item.updated_highlight.text
+            self.bookmarks[i].text = T(_("Page %1 %2 @ %3"), page,
+                                        new_text,
+                                        item.updated_highlight.datetime)
+            self.bookmarks[i].datetime = item.updated_highlight.datetime
+            self.bookmarks[i].chapter = item.updated_highlight.chapter
+            self:onSaveSettings()
+        end
+    end
 end
 
 function ReaderBookmark:renameBookmark(item, from_highlight)
@@ -434,6 +605,13 @@ function ReaderBookmark:renameBookmark(item, from_highlight)
                     local page = item.page
                     if not self.ui.document.info.has_pages then
                         page = self.ui.document:getPageFromXPointer(page)
+                        if self.ui.document:hasHiddenFlows() then
+                            local flow = self.ui.document:getPageFlow(page)
+                            page = self.ui.document:getPageNumberInFlow(page)
+                            if flow > 0 then
+                                page = T("[%1]%2", page, flow)
+                            end
+                        end
                     end
                     item.text = T(_("Page %1 %2 @ %3"), page, item.notes, item.datetime)
                 end
@@ -448,6 +626,9 @@ function ReaderBookmark:renameBookmark(item, from_highlight)
         title = _("Rename bookmark"),
         input = item.text,
         input_type = "text",
+        allow_newline = true,
+        cursor_at_end = false,
+        add_scroll_buttons = true,
         buttons = {
             {
                 {
@@ -480,8 +661,8 @@ function ReaderBookmark:renameBookmark(item, from_highlight)
             }
         },
     }
-    self.input:onShowKeyboard()
     UIManager:show(self.input)
+    self.input:onShowKeyboard()
 end
 
 function ReaderBookmark:toggleBookmark(pn_or_xp)
@@ -491,13 +672,16 @@ function ReaderBookmark:toggleBookmark(pn_or_xp)
     else
         -- build notes from TOC
         local notes = self.ui.toc:getTocTitleByPage(pn_or_xp)
+        local chapter_name = notes
         if notes ~= "" then
-            notes = "in "..notes
+            -- @translators In which chapter title (%1) a note is found.
+            notes = T(_("in %1"), notes)
         end
         self:addBookmark({
             page = pn_or_xp,
             datetime = os.date("%Y-%m-%d %H:%M:%S"),
             notes = notes,
+            chapter = chapter_name
         })
     end
 end
@@ -538,6 +722,24 @@ function ReaderBookmark:getNextBookmarkedPageFromPage(pn_or_xp)
     end
 end
 
+function ReaderBookmark:getFirstBookmarkedPageFromPage(pn_or_xp)
+    if #self.bookmarks > 0 then
+        local first = #self.bookmarks
+        if self:isBookmarkPageInPageOrder(pn_or_xp, self.bookmarks[first]) then
+            return self.bookmarks[first].page
+        end
+    end
+end
+
+function ReaderBookmark:getLastBookmarkedPageFromPage(pn_or_xp)
+    if #self.bookmarks > 0 then
+        local last = 1
+        if self:isBookmarkPageInReversePageOrder(pn_or_xp, self.bookmarks[last]) then
+            return self.bookmarks[last].page
+        end
+    end
+end
+
 function ReaderBookmark:onGotoPreviousBookmark(pn_or_xp)
     self:gotoBookmark(self:getPreviousBookmarkedPage(pn_or_xp))
     return true
@@ -545,6 +747,22 @@ end
 
 function ReaderBookmark:onGotoNextBookmark(pn_or_xp)
     self:gotoBookmark(self:getNextBookmarkedPage(pn_or_xp))
+    return true
+end
+
+function ReaderBookmark:onGotoNextBookmarkFromPage(add_current_location_to_stack)
+    if add_current_location_to_stack ~= false then -- nil or true
+        self.ui.link:addCurrentLocationToStack()
+    end
+    self:gotoBookmark(self:getNextBookmarkedPageFromPage(self.ui:getCurrentPage()))
+    return true
+end
+
+function ReaderBookmark:onGotoPreviousBookmarkFromPage(add_current_location_to_stack)
+    if add_current_location_to_stack ~= false then -- nil or true
+        self.ui.link:addCurrentLocationToStack()
+    end
+    self:gotoBookmark(self:getPreviousBookmarkedPageFromPage(self.ui:getCurrentPage()))
     return true
 end
 
@@ -558,6 +776,32 @@ function ReaderBookmark:getLatestBookmark()
         end
     end
     return latest_bookmark
+end
+
+function ReaderBookmark:hasBookmarks()
+    return self.bookmarks and #self.bookmarks > 0
+end
+
+function ReaderBookmark:getNumberOfBookmarks()
+    return self.bookmarks and #self.bookmarks or 0
+end
+
+function ReaderBookmark:getNumberOfHighlightsAndNotes()
+    local highlights = 0
+    local notes = 0
+    for i = 1, #self.bookmarks do
+        if self.bookmarks[i].highlighted then
+            highlights = highlights + 1
+            -- No real way currently to know which highlights
+            -- have been edited and became "notes". Editing them
+            -- adds this 'text' field, but just showing bookmarks
+            -- do that as well...
+            if self.bookmarks[i].text then
+                notes = notes + 1
+            end
+        end
+    end
+    return highlights, notes
 end
 
 return ReaderBookmark

@@ -1,24 +1,30 @@
 describe("Readersearch module", function()
     local sample_epub = "spec/front/unit/data/juliet.epub"
     local sample_pdf = "spec/front/unit/data/sample.pdf"
-    local DocumentRegistry, ReaderUI, dbg
+    local DocumentRegistry, ReaderUI, Screen, dbg
 
     setup(function()
         require("commonrequire")
         DocumentRegistry = require("document/documentregistry")
         ReaderUI = require("apps/reader/readerui")
+        Screen = require("device").screen
         dbg = require("dbg")
     end)
 
     describe("search API for EPUB documents", function()
-        local doc, search, rolling
+        local readerui, doc, search, rolling
         setup(function()
-            local readerui = ReaderUI:new{
+            readerui = ReaderUI:new{
+                dimen = Screen:getSize(),
                 document = DocumentRegistry:openDocument(sample_epub),
             }
             doc = readerui.document
             search = readerui.search
             rolling = readerui.rolling
+        end)
+        teardown(function()
+            readerui:closeDocument()
+            readerui:onClose()
         end)
         it("should search backward", function()
             rolling:onGotoPage(10)
@@ -65,14 +71,18 @@ describe("Readersearch module", function()
             end
         end)
         it("should find the last occurrence", function()
+            -- local logger = require("logger")
+            -- logger.warn("nb of pages", doc:getPageCount())
+            -- 20190202: currently 242 pages
             for i = 100, 180, 10 do
                 rolling:onGotoPage(i)
                 local words = search:searchFromEnd("Verona")
                 assert.truthy(words)
                 local pageno = doc:getPageFromXPointer(words[1].start)
-                assert.truthy(pageno > 200)
+                -- logger.info("last match on page", pageno)
+                assert.truthy(pageno > 185)
             end
-            for i = 230, 235, 1 do
+            for i = 290, 335, 1 do
                 rolling:onGotoPage(i)
                 local words = search:searchFromEnd("Verona")
                 assert(words == nil)
@@ -81,13 +91,29 @@ describe("Readersearch module", function()
         it("should find all occurrences", function()
             local count = 0
             rolling:onGotoPage(1)
+            local cur_page = doc:getCurrentPage()
             local words = search:searchFromCurrent("Verona", 0)
             while words do
-                count = count + #words
+                local new_page = nil
                 for _, word in ipairs(words) do
                     --dbg("found word", word.start)
+                    local word_page = doc:getPageFromXPointer(word.start)
+                    if word_page ~= cur_page then -- ignore words on current page
+                        if not new_page then -- first word on a new page
+                            new_page = word_page
+                            count = count + 1
+                            doc:gotoXPointer(word.start) -- go to this new page
+                        else -- new page seen
+                            if word_page == new_page then -- only count words on this new page
+                                count = count + 1
+                            end
+                        end
+                    end
                 end
-                doc:gotoXPointer(words[#words].start)
+                if not new_page then -- no word seen on any new page
+                    break
+                end
+                cur_page = doc:getCurrentPage()
                 words = search:searchNext("Verona", 0)
             end
             assert.are.equal(13, count)
@@ -95,14 +121,19 @@ describe("Readersearch module", function()
     end)
 
     describe("search API for PDF documents", function()
-        local doc, search, paging
+        local readerui, doc, search, paging
         setup(function()
-            local readerui = ReaderUI:new{
+            readerui = ReaderUI:new{
+                dimen = Screen:getSize(),
                 document = DocumentRegistry:openDocument(sample_pdf),
             }
             doc = readerui.document
             search = readerui.search
             paging = readerui.paging
+        end)
+        teardown(function()
+            readerui:closeDocument()
+            readerui:onClose()
         end)
         it("should match single word with case insensitive option in one page", function()
             assert.are.equal(9, #doc.koptinterface:findAllMatches(doc, "what", true, 20))

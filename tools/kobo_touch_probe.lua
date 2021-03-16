@@ -9,10 +9,13 @@ local DataStorage = require("datastorage")
 local _ = require("gettext")
 
 -- read settings and check for language override
+-- but don't re-read if already done, to avoid causing problems for unit tests
 -- has to be done before requiring other files because
 -- they might call gettext on load
-G_reader_settings = require("luasettings"):open(
-    DataStorage:getDataDir().."/settings.reader.lua")
+if G_reader_settings == nil then
+    G_reader_settings = require("luasettings"):open(
+        DataStorage:getDataDir().."/settings.reader.lua")
+end
 local lang_locale = G_reader_settings:readSetting("language")
 if lang_locale then
     _.changeLang(lang_locale)
@@ -48,7 +51,7 @@ function TouchProbe:init()
         },
     }
     self.image_widget = ImageWidget:new{
-        file = "resources/kobo-touch-probe.png",
+        file = "tools/kobo-touch-probe.png",
     }
     local screen_w, screen_h = Screen:getWidth(), Screen:getHeight()
     local img_w, img_h = self.image_widget:getSize().w, self.image_widget:getSize().h

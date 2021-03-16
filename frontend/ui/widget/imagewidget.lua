@@ -4,7 +4,7 @@ ImageWidget shows an image from a file or memory
 Show image from file example:
 
         UIManager:show(ImageWidget:new{
-            file = "resources/info-i.png",
+            file = "resources/koreader.png",
             -- Make sure alpha is set to true if png has transparent background
             -- alpha = true,
         })
@@ -20,13 +20,14 @@ Show image from memory example:
 
 ]]
 
-local Widget = require("ui/widget/widget")
+local Blitbuffer = require("ffi/blitbuffer")
+local Cache = require("cache")
+local CacheItem = require("cacheitem")
+local Geom = require("ui/geometry")
+local RenderImage = require("ui/renderimage")
 local Screen = require("device").screen
 local UIManager = require("ui/uimanager")
-local CacheItem = require("cacheitem")
-local Mupdf = require("ffi/mupdf")
-local Geom = require("ui/geometry")
-local Cache = require("cache")
+local Widget = require("ui/widget/widget")
 local logger = require("logger")
 
 -- DPI_SCALE can't change without a restart, so let's compute it now
@@ -38,7 +39,7 @@ end
 local DPI_SCALE = get_dpi_scale()
 
 local ImageCache = Cache:new{
-    max_memsize = 2*1024*1024, -- 2M of image cache
+    max_memsize = 5*1024*1024, -- 5M of image cache
     current_memsize = 0,
     cache = {},
     -- this will hold the LRU order of the cache
@@ -57,7 +58,7 @@ end
 local ImageWidget = Widget:new{
     -- Can be provided with a path to a file
     file = nil,
-    -- or an already made BlitBuffer (ie: made by Mupdf.renderImage())
+    -- or an already made BlitBuffer (ie: made by RenderImage)
     image = nil,
 
     -- Whether BlitBuffer rendered from file should be cached
@@ -78,6 +79,7 @@ local ImageWidget = Widget:new{
     invert = nil,
     dim = nil,
     alpha = false, -- honors alpha values from the image
+    is_icon = false, -- set to true by sub-class IconWidget
 
     -- When rotation_angle is not 0, native image is rotated by this angle
     -- before scaling.
@@ -96,7 +98,7 @@ local ImageWidget = Widget:new{
     -- Whether to use former blitbuffer:scale() (default to using MuPDF)
     use_legacy_image_scaling = G_reader_settings:isTrue("legacy_image_scaling"),
 
-    -- For initial positionning, if (possibly scaled) image overflows width/height
+    -- For initial positioning, if (possibly scaled) image overflows width/height
     center_x_ratio = 0.5, -- default is centered on image's center
     center_y_ratio = 0.5,
 
@@ -127,16 +129,24 @@ end
 
 function ImageWidget:_loadfile()
     local itype = string.lower(string.match(self.file, ".+%.([^.]+)") or "")
-    if itype == "png" or itype == "jpg" or itype == "jpeg"
-            or itype == "tiff" then
-        local hash = "image|"..self.file.."|"..(self.width or "").."|"..(self.height or "")
-        -- Do the scaling for DPI here, so it can be cached and not re-done
-        -- each time in _render()
+    if itype == "svg" or itype == "png" or itype == "jpg" or itype == "jpeg"
+            or itype == "gif" or itype == "tiff" or itype == "tif" then
         -- In our use cases for files (icons), we either provide width and height,
         -- or just scale_for_dpi, and scale_factor should stay nil.
-        -- Other combinations will result in double scaling anyway, and unexpected results.
+        -- Other combinations will result in double scaling, and unexpected results.
+        -- We should anyway only give self.width and self.height to renderImageFile(),
+        -- and use them in cache hash, when self.scale_factor is nil, when we are sure
+        -- we don't need to keep aspect ratio.
+        local width, height
+        if self.scale_factor == nil then
+            width = self.width
+            height = self.height
+        end
+        local hash = "image|"..self.file.."|"..(width or "").."|"..(height or "")
+        -- Do the scaling for DPI here, so it can be cached and not re-done
+        -- each time in _render() (but not if scale_factor, to avoid double scaling)
         local scale_for_dpi_here = false
-        if self.scale_for_dpi and DPI_SCALE ~= 1 then
+        if self.scale_for_dpi and DPI_SCALE ~= 1 and not self.scale_factor then
             scale_for_dpi_here = true -- we'll do it before caching
             hash = hash .. "|d"
             self.already_scaled_for_dpi = true -- so we don't do it again in _render()
@@ -146,27 +156,78 @@ function ImageWidget:_loadfile()
             -- hit cache
             self._bb = cache.bb
             self._bb_disposable = false -- don't touch or free a cached _bb
+            self._is_straight_alpha = cache.is_straight_alpha
         else
-            self._bb = Mupdf.renderImageFile(self.file, self.width, self.height)
-            if scale_for_dpi_here then
-                local new_bb
-                local bb_w, bb_h = self._bb:getWidth(), self._bb:getHeight()
-                if self.use_legacy_image_scaling then
-                    new_bb = self._bb:scale(bb_w * DPI_SCALE, bb_h * DPI_SCALE)
-                else
-                    new_bb = Mupdf.scaleBlitBuffer(self._bb, math.floor(bb_w * DPI_SCALE), math.floor(bb_h * DPI_SCALE))
+            if itype == "svg" then
+                local zoom
+                if scale_for_dpi_here then
+                    zoom = DPI_SCALE
+                elseif self.scale_factor == 0 then
+                    -- renderSVGImageFile() keeps aspect ratio by default
+                    width = self.width
+                    height = self.height
                 end
-                self._bb:free()
-                self._bb = new_bb
+                -- If NanoSVG is used by renderSVGImageFile, we'll get self._is_straight_alpha=true,
+                -- and paintTo() must use alphablitFrom() instead of pmulalphablitFrom() (which is
+                -- fine for everything MuPDF renders out)
+                self._bb, self._is_straight_alpha = RenderImage:renderSVGImageFile(self.file, width, height, zoom)
+            else
+                self._bb = RenderImage:renderImageFile(self.file, false, width, height)
+                if scale_for_dpi_here then
+                    local bb_w, bb_h = self._bb:getWidth(), self._bb:getHeight()
+                    self._bb = RenderImage:scaleBlitBuffer(self._bb, math.floor(bb_w * DPI_SCALE), math.floor(bb_h * DPI_SCALE))
+                end
             end
+
+            -- Now, if that was *also* one of our icons, we haven't explicitly requested to keep the alpha channel intact,
+            -- and it actually has an alpha channel, compose it against a background-colored BB now, and cache *that*.
+            -- This helps us avoid repeating alpha-blending steps down the line,
+            -- and also ensures icon highlights/unhighlights behave sensibly.
+            if self.is_icon and not self.alpha then
+                local bbtype = self._bb:getType()
+                if bbtype == Blitbuffer.TYPE_BB8A or bbtype == Blitbuffer.TYPE_BBRGB32 then
+                    local icon_bb = Blitbuffer.new(self._bb.w, self._bb.h, Screen.bb:getType())
+                    --- @note: Should match the background color. Which is currently hard-coded as white ;).
+                    ---        See the note below in paintTo for how to make the dim flag behave in case
+                    ---        this no longer actually is white ;).
+                    icon_bb:fill(Blitbuffer.COLOR_WHITE)
+
+                    -- And now simply compose the icon on top of that, with dithering if necessary
+                    -- Remembering that NanoSVG feeds us straight alpha, unlike MµPDF
+                    if self._is_straight_alpha then
+                        if Screen.sw_dithering then
+                            icon_bb:ditheralphablitFrom(self._bb, 0, 0, 0, 0, icon_bb.w, icon_bb.h)
+                        else
+                            icon_bb:alphablitFrom(self._bb, 0, 0, 0, 0, icon_bb.w, icon_bb.h)
+                        end
+                    else
+                        if Screen.sw_dithering then
+                            icon_bb:ditherpmulalphablitFrom(self._bb, 0, 0, 0, 0, icon_bb.w, icon_bb.h)
+                        else
+                            icon_bb:pmulalphablitFrom(self._bb, 0, 0, 0, 0, icon_bb.w, icon_bb.h)
+                        end
+                    end
+
+                    -- Free the original icon w/ an alpha-channel, keep the flattened one
+                    self._bb:free()
+                    self._bb = icon_bb
+
+                    -- There's no longer an alpha channel ;)
+                    self._is_straight_alpha = nil
+                end
+            end
+
             if not self.file_do_cache then
                 self._bb_disposable = true -- we made it, we can modify and free it
             else
                 self._bb_disposable = false -- don't touch or free a cached _bb
                 -- cache this image
                 logger.dbg("cache", hash)
-                cache = ImageCacheItem:new{ bb = self._bb }
-                cache.size = cache.bb.pitch * cache.bb.h * cache.bb:getBpp() / 8
+                cache = ImageCacheItem:new{
+                    bb = self._bb,
+                    is_straight_alpha = self._is_straight_alpha,
+                }
+                cache.size = tonumber(cache.bb.stride) * cache.bb.h
                 ImageCache:insert(hash, cache)
             end
         end
@@ -240,42 +301,22 @@ function ImageWidget:_render()
     end
 
     -- replace blitbuffer with a resized one if needed
-    local new_bb = nil
     if self.scale_factor == nil then
         -- no scaling, but strech to width and height, only if provided and needed
         if self.width and self.height and (self.width ~= bb_w or self.height ~= bb_h) then
             logger.dbg("ImageWidget: stretching")
-            if self.use_legacy_image_scaling then
-                -- Uses "simple nearest neighbour scaling"
-                new_bb = self._bb:scale(self.width, self.height)
-            else
-                -- Better quality scaling with MuPDF
-                new_bb = Mupdf.scaleBlitBuffer(self._bb, self.width, self.height)
-            end
+            self._bb = RenderImage:scaleBlitBuffer(self._bb, self.width, self.height, self._bb_disposable)
+            self._bb_disposable = true -- new bb will have to be freed
         end
     elseif self.scale_factor ~= 1 then
         -- scale by scale_factor (not needed if scale_factor == 1)
         logger.dbg("ImageWidget: scaling by", self.scale_factor)
-        if self.use_legacy_image_scaling then
-            new_bb = self._bb:scale(bb_w * self.scale_factor, bb_h * self.scale_factor)
-        else
-            -- Better to ensure we give integer width and height to MuPDF, to
-            -- avoid a black 1-pixel line at right and bottom of image
-            new_bb = Mupdf.scaleBlitBuffer(self._bb, math.floor(bb_w * self.scale_factor), math.floor(bb_h * self.scale_factor))
-        end
+        self._bb = RenderImage:scaleBlitBuffer(self._bb, bb_w * self.scale_factor, bb_h * self.scale_factor, self._bb_disposable)
+        self._bb_disposable = true -- new bb will have to be freed
     end
-    if new_bb then
-        -- We made a new blitbuffer, we need to explicitely free
-        -- the old one to not leak memory
-        if self._bb_disposable then
-            self._bb:free()
-        end
-        self._bb = new_bb
-        self._bb_disposable = true -- new object will have to be freed
-        bb_w, bb_h = self._bb:getWidth(), self._bb:getHeight()
-    end
+    bb_w, bb_h = self._bb:getWidth(), self._bb:getHeight()
 
-    -- deal with positionning
+    -- deal with positioning
     if self.width and self.height then
         -- if image is bigger than paint area, allow center_ratio variation
         -- around 0.5 so we can pan till image border
@@ -353,8 +394,9 @@ function ImageWidget:panBy(x, y)
     if new_offset_x ~= self._offset_x or new_offset_y ~= self._offset_y then
         self._offset_x = new_offset_x
         self._offset_y = new_offset_y
+        self.dithered = true
         UIManager:setDirty("all", function()
-            return "partial", self.dimen
+            return "ui", self.dimen, true
         end)
     end
     -- return new center ratio, so caller can use them later to create a new
@@ -372,16 +414,66 @@ function ImageWidget:paintTo(bb, x, y)
         h = size.h
     }
     logger.dbg("blitFrom", x, y, self._offset_x, self._offset_y, size.w, size.h)
+    local do_alpha = false
     if self.alpha == true then
-        bb:alphablitFrom(self._bb, x, y, self._offset_x, self._offset_y, size.w, size.h)
+        -- Only actually try to alpha-blend if the image really has an alpha channel...
+        local bbtype = self._bb:getType()
+        if bbtype == Blitbuffer.TYPE_BB8A or bbtype == Blitbuffer.TYPE_BBRGB32 then
+            do_alpha = true
+        end
+    end
+    if do_alpha then
+        --- @note: MuPDF feeds us premultiplied alpha (and we don't care w/ GifLib, as alpha is all or nothing),
+        ---        while NanoSVG feeds us straight alpha.
+        ---        SVG icons are currently flattened at caching time, so we'll only go through the straight alpha
+        ---        codepath for non-icons SVGs.
+        if self._is_straight_alpha then
+            --- @note: Our icons are already dithered properly, either at encoding time, or at caching time.
+            if Screen.sw_dithering and not self.is_icon then
+                bb:ditheralphablitFrom(self._bb, x, y, self._offset_x, self._offset_y, size.w, size.h)
+            else
+                bb:alphablitFrom(self._bb, x, y, self._offset_x, self._offset_y, size.w, size.h)
+            end
+        else
+            if Screen.sw_dithering and not self.is_icon then
+                bb:ditherpmulalphablitFrom(self._bb, x, y, self._offset_x, self._offset_y, size.w, size.h)
+            else
+                bb:pmulalphablitFrom(self._bb, x, y, self._offset_x, self._offset_y, size.w, size.h)
+            end
+        end
     else
-        bb:blitFrom(self._bb, x, y, self._offset_x, self._offset_y, size.w, size.h)
+        if Screen.sw_dithering and not self.is_icon then
+            bb:ditherblitFrom(self._bb, x, y, self._offset_x, self._offset_y, size.w, size.h)
+        else
+            bb:blitFrom(self._bb, x, y, self._offset_x, self._offset_y, size.w, size.h)
+        end
     end
     if self.invert then
         bb:invertRect(x, y, size.w, size.h)
     end
+    --- @note: This is mainly geared at black icons/text on a *white* background,
+    ---        otherwise the background color itself will shift.
+    ---        i.e., this actually *lightens* the rectangle, but since it's aimed at black,
+    ---        it makes it gray, dimmer; hence the name.
+    ---        TL;DR: If we one day want that to work for icons on a non-white background,
+    ---        a better solution would probably be to take the icon pixmap as an alpha-mask,
+    ---        (which simply involves blending it onto a white background, then inverting the result),
+    ---        and colorBlit it a dim gray onto the target bb.
+    ---        This would require the *original* transparent icon, not the flattened one in the cache.
+    ---        c.f., https://github.com/koreader/koreader/pull/6937#issuecomment-748372429 for a PoC
     if self.dim then
         bb:dimRect(x, y, size.w, size.h)
+    end
+    -- In night mode, invert all rendered images, so the original is
+    -- displayed when the whole screen is inverted by night mode.
+    -- Except for our *black & white* icons: we do *NOT* want to invert them again:
+    -- they should match the UI's text/backgound.
+    --- @note: As for *color* icons, we really *ought* to invert them here,
+    ---        but we currently don't, as we don't really trickle down
+    ---        a way to discriminate them from the B&W ones.
+    ---        Currently, this is *only* the KOReader icon in Help, AFAIK.
+    if Screen.night_mode and not self.is_icon then
+        bb:invertRect(x, y, size.w, size.h)
     end
 end
 
@@ -390,6 +482,7 @@ end
 -- (ie: in some other widget's update()), to not leak memory with
 -- BlitBuffer zombies
 function ImageWidget:free()
+    --print("ImageWidget:free on", self, "for BB?", self._bb, self._bb_disposable)
     if self._bb and self._bb_disposable and self._bb.free then
         self._bb:free()
         self._bb = nil

@@ -1,63 +1,69 @@
+local BD = require("ui/bidi")
 local ConfirmBox = require("ui/widget/confirmbox")
+local DocumentRegistry = require("document/documentregistry")
 local FtpApi = require("apps/cloudstorage/ftpapi")
 local InfoMessage = require("ui/widget/infomessage")
 local MultiInputDialog = require("ui/widget/multiinputdialog")
 local ReaderUI = require("apps/reader/readerui")
 local Screen = require("device").screen
 local UIManager = require("ui/uimanager")
+local logger = require("logger")
 local util = require("util")
 local _ = require("gettext")
 local T = require("ffi/util").template
 
-local Ftp = {
-}
-local function generateUrl(address, user, pass)
-    local colon_sign = ""
-    local at_sign = ""
-    if user ~= "" then
-        at_sign = "@"
-    end
-    if pass ~= "" then
-        colon_sign = ":"
-    end
-    local replace = "://" .. user .. colon_sign .. pass .. at_sign
-    local url = string.gsub(address, "://", replace)
-    return url
-end
+local Ftp = {}
 
 function Ftp:run(address, user, pass, path)
-    local url = generateUrl(address, user, pass) .. path
+    local url = FtpApi:generateUrl(address, util.urlEncode(user), util.urlEncode(pass)) .. path
     return FtpApi:listFolder(url, path)
 end
 
 function Ftp:downloadFile(item, address, user, pass, path, close)
-    local url = generateUrl(address, user, pass) .. item.url
-    local response = FtpApi:downloadFile(url)
+    local url = FtpApi:generateUrl(address, util.urlEncode(user), util.urlEncode(pass)) .. item.url
+    logger.dbg("downloadFile url", url)
+    local response = FtpApi:ftpGet(url, "retr")
     if response ~= nil then
         path = util.fixUtf8(path, "_")
-        local file = io.open(path, "w")
+        local file, err = io.open(path, "w")
+        if not file then
+            UIManager:show(InfoMessage:new{
+                text = T(_("Could not save file to %1:\n%2"), BD.filepath(path), err),
+            })
+            return
+        end
         file:write(response)
         file:close()
-        UIManager:show(ConfirmBox:new{
-            text = T(_("File saved to:\n %1\nWould you like to read the downloaded book now?"),
-                path),
-            ok_callback = function()
-                close()
-                ReaderUI:showReader(path)
-            end
-        })
+        local __, filename = util.splitFilePathName(path)
+        if G_reader_settings:isTrue("show_unsupported") and not DocumentRegistry:hasProvider(filename) then
+            UIManager:show(InfoMessage:new{
+                text = T(_("File saved to:\n%1"), BD.filepath(path)),
+            })
+        else
+            UIManager:show(ConfirmBox:new{
+                text = T(_("File saved to:\n%1\nWould you like to read the downloaded book now?"),
+                    BD.filepath(path)),
+                ok_callback = function()
+                    close()
+                    ReaderUI:showReader(path)
+                end
+            })
+        end
     else
         UIManager:show(InfoMessage:new{
-            text = T(_("Could not save file to:\n%1"), path),
+            text = T(_("Could not save file to:\n%1"), BD.filepath(path)),
             timeout = 3,
         })
     end
 end
 
 function Ftp:config(item, callback)
-    local text_info = "FTP address must be in the format ftp://example.domian.com\n"..
-        "Also supported is format with IP e.g: ftp://10.10.10.1\n"..
-        "Username and password are optional."
+    local text_info = _([[
+The FTP address must be in the following format:
+ftp://example.domain.com
+An IP address is also supported, for example:
+ftp://10.10.10.1
+Username and password are optional.]])
     local hint_name = _("Your FTP name")
     local text_name = ""
     local hint_address = _("FTP address eg ftp://example.com")
@@ -66,6 +72,8 @@ function Ftp:config(item, callback)
     local text_username = ""
     local hint_password = _("FTP password")
     local text_password = ""
+    local hint_folder = _("FTP folder")
+    local text_folder = "/"
     local title
     local text_button_right = _("Add")
     if item then
@@ -75,6 +83,7 @@ function Ftp:config(item, callback)
         text_address = item.address
         text_username = item.username
         text_password = item.password
+        text_folder = item.url
     else
         title = _("Add FTP account")
     end
@@ -99,7 +108,13 @@ function Ftp:config(item, callback)
             {
                 text = text_password,
                 input_type = "string",
+                text_type = "password",
                 hint = hint_password,
+            },
+            {
+                text = text_folder,
+                input_type = "string",
+                hint = hint_folder,
             },
         },
         buttons = {
@@ -140,12 +155,12 @@ function Ftp:config(item, callback)
                 },
             },
         },
-        width = Screen:getWidth() * 0.95,
-        height = Screen:getHeight() * 0.2,
+        width = math.floor(Screen:getWidth() * 0.95),
+        height = math.floor(Screen:getHeight() * 0.2),
         input_type = "text",
     }
-    self.settings_dialog:onShowKeyboard()
     UIManager:show(self.settings_dialog)
+    self.settings_dialog:onShowKeyboard()
 end
 
 function Ftp:info(item)

@@ -13,10 +13,15 @@ describe("Readerdictionary module", function()
     setup(function()
         local sample_epub = "spec/front/unit/data/leaves.epub"
         readerui = ReaderUI:new{
+            dimen = Screen:getSize(),
             document = DocumentRegistry:openDocument(sample_epub),
         }
         rolling = readerui.rolling
         dictionary = readerui.dictionary
+    end)
+    teardown(function()
+        readerui:closeDocument()
+        readerui:onClose()
     end)
     it("should show quick lookup window", function()
         local name = "screenshots/reader_dictionary.png"

@@ -1,23 +1,30 @@
 local CenterContainer = require("ui/widget/container/centercontainer")
 local ConfirmBox = require("ui/widget/confirmbox")
 local DataStorage = require("datastorage")
+local Device = require("device")
 local Font = require("ui/font")
 local InfoMessage = require("ui/widget/infomessage")
 local InputContainer = require("ui/widget/container/inputcontainer")
 local InputDialog = require("ui/widget/inputdialog")
 local Menu = require("ui/widget/menu")
 local MultiInputDialog = require("ui/widget/multiinputdialog")
+local Size = require("ui/size")
 local UIManager = require("ui/uimanager")
 local dump = require("dump")
 local isAndroid, android = pcall(require, "android")
+local logger = require("logger")
 local util = require("ffi/util")
 local _ = require("gettext")
 local Screen = require("device").screen
+
+local is_appimage = os.getenv("APPIMAGE")
 
 local function getDefaultsPath()
     local defaults_path = DataStorage:getDataDir() .. "/defaults.lua"
     if isAndroid then
         defaults_path = android.dir .. "/defaults.lua"
+    elseif is_appimage then
+        defaults_path = "defaults.lua"
     end
     return defaults_path
 end
@@ -30,7 +37,6 @@ local SetDefaults = InputContainer:new{
     defaults_value = {},
     results = {},
     defaults_menu = {},
-    initialized = false,
     changed = {},
     settings_changed = false,
 }
@@ -52,51 +58,53 @@ end
 function SetDefaults:init()
     self.results = {}
 
-    if not self.initialized then
-        local defaults = {}
-        local load_defaults = loadfile(defaults_path)
+    local defaults = {}
+    local load_defaults = loadfile(defaults_path)
+    setfenv(load_defaults, defaults)
+    load_defaults()
+
+    local file = io.open(persistent_defaults_path, "r")
+    if file ~= nil then
+        file:close()
+        load_defaults = loadfile(persistent_defaults_path)
         setfenv(load_defaults, defaults)
         load_defaults()
+    end
 
-        local file = io.open(persistent_defaults_path, "r")
-        if file ~= nil then
-            file:close()
-            load_defaults = loadfile(persistent_defaults_path)
-            setfenv(load_defaults, defaults)
-            load_defaults()
-        end
-
-        local i = 1
-        for n, v in util.orderedPairs(defaults) do
-            self.defaults_name[i] = n
-            self.defaults_value[i] = v
-            i = i + 1
-        end
-
-        self.initialized = true
+    local idx = 1
+    for n, v in util.orderedPairs(defaults) do
+        self.defaults_name[idx] = n
+        self.defaults_value[idx] = v
+        idx = idx + 1
     end
 
     local menu_container = CenterContainer:new{
         dimen = Screen:getSize(),
     }
-    -- FIXME:
+    --- @fixme
     -- in this use case (an input dialog is closed and the menu container is
     -- opened immediately) we need to set the full screen dirty because
     -- otherwise only the input dialog part of the screen is refreshed.
     menu_container.onShow = function()
-        UIManager:setDirty(nil, "partial")
+        UIManager:setDirty(nil, "ui")
     end
 
     self.defaults_menu = Menu:new{
-        width = Screen:getWidth()-15,
-        height = Screen:getHeight()-15,
+        width = Screen:getWidth() - (Size.margin.fullscreen_popout * 2),
+        height = Screen:getHeight() - (Size.margin.fullscreen_popout * 2),
         cface = Font:getFace("smallinfofont"),
-        perpage = G_reader_settings:readSetting("items_per_page") or 14,
         show_parent = menu_container,
         _manager = self,
     }
+    -- Prevent menu from closing when editing a value
+    function self.defaults_menu:onMenuSelect(item)
+        item.callback()
+    end
+
     table.insert(menu_container, self.defaults_menu)
     self.defaults_menu.close_callback = function()
+        logger.dbg("Closing defaults menu")
+        self:saveBeforeExit()
         UIManager:close(menu_container)
     end
 
@@ -105,7 +113,6 @@ function SetDefaults:init()
         enabled = true,
         callback = function()
             self:close()
-            UIManager:show(menu_container)
         end,
     }
 
@@ -132,7 +139,6 @@ function SetDefaults:init()
                                     self.results[i].text = self:build_setting(i)
                                     self:close()
                                     self.defaults_menu:switchItemTable("Defaults", self.results, i)
-                                    UIManager:show(menu_container)
                                 end
                             },
                             {
@@ -146,16 +152,15 @@ function SetDefaults:init()
                                     self.results[i].text = self:build_setting(i)
                                     self.defaults_menu:switchItemTable("Defaults", self.results, i)
                                     self:close()
-                                    UIManager:show(menu_container)
                                 end
                             },
                         },
                     },
                     input_type = setting_type,
-                    width = Screen:getWidth() * 0.95,
+                    width = math.floor(Screen:getWidth() * 0.95),
                 }
-                self.set_dialog:onShowKeyboard()
                 UIManager:show(self.set_dialog)
+                self.set_dialog:onShowKeyboard()
             end
 
             table.insert(self.results, {
@@ -169,6 +174,8 @@ function SetDefaults:init()
                     table.insert(fields, {
                         text = tostring(k) .. " = " .. tostring(v),
                         hint = "",
+                        padding = Screen:scaleBySize(2),
+                        margin = Screen:scaleBySize(2),
                     })
                 end
                 self.set_dialog = MultiInputDialog:new{
@@ -197,16 +204,15 @@ function SetDefaults:init()
 
                                     self:close()
                                     self.defaults_menu:switchItemTable("Defaults", self.results, i)
-                                    UIManager:show(menu_container)
                                 end,
                             },
                         },
                     },
-                    width = Screen:getWidth() * 0.95,
-                    height = Screen:getHeight() * 0.2,
+                    width = math.floor(Screen:getWidth() * 0.95),
+                    height = math.floor(Screen:getHeight() * 0.2),
                 }
-                self.set_dialog:onShowKeyboard()
                 UIManager:show(self.set_dialog)
+                self.set_dialog:onShowKeyboard()
             end
 
             table.insert(self.results, {
@@ -236,16 +242,15 @@ function SetDefaults:init()
                                     end
                                     self:close()
                                     self.defaults_menu:switchItemTable("Defaults", self.results, i)
-                                    UIManager:show(menu_container)
                                 end,
                             },
                         },
                     },
                     input_type = setting_type,
-                    width = Screen:getWidth() * 0.95,
+                    width = math.floor(Screen:getWidth() * 0.95),
                 }
-                self.set_dialog:onShowKeyboard()
                 UIManager:show(self.set_dialog)
+                self.set_dialog:onShowKeyboard()
             end
 
             table.insert(self.results, {
@@ -348,6 +353,35 @@ function SetDefaults:saveSettings()
         })
     end
     self.settings_changed = false
+end
+
+function SetDefaults:saveBeforeExit(callback)
+    local save_text = _("Save and quit")
+    if Device:canRestart() then
+        save_text = _("Save and restart")
+    end
+    if self.settings_changed then
+        UIManager:show(ConfirmBox:new{
+            text = _("KOReader needs to be restarted to apply the new default settings."),
+            ok_text = save_text,
+            ok_callback = function()
+                self.settings_changed = false
+                self:saveSettings()
+                if Device:canRestart() then
+                    UIManager:restartKOReader()
+                else
+                    UIManager:quit()
+                end
+            end,
+            cancel_text = _("Discard changes"),
+            cancel_callback = function()
+                logger.info("discard defaults")
+                pcall(dofile, defaults_path)
+                pcall(dofile, persistent_defaults_path)
+                self.settings_changed = false
+            end,
+        })
+    end
 end
 
 return SetDefaults

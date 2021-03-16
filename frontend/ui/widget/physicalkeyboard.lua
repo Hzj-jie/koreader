@@ -52,7 +52,7 @@ function PhysicalNumericKey:init()
             VerticalGroup:new{
                 label_widget,
                 TextWidget:new{
-                    fgcolor = Blitbuffer.COLOR_GREY,
+                    fgcolor = Blitbuffer.COLOR_DARK_GRAY,
                     text = self.physical_key_label,
                     face = self.pkey_face,
                 },
@@ -119,7 +119,7 @@ function PhysicalKeyboard:onKeyPress(ev)
         if self.key_transformer then
             key = self.key_transformer[key]
         end
-        self.inputbox:addChar(key)
+        self.inputbox:addChars(key)
     end
 end
 

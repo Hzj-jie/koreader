@@ -1,10 +1,10 @@
 local Device = require("device")
 
 local command
--- TODO(hzj-jie): Does pocketbook provide ntpdate?
+--- @todo (hzj-jie): Does pocketbook provide ntpdate?
 if Device:isKobo() then
     command = "ntpd -q -n -p pool.ntp.org"
-elseif Device:isKindle() or Device:isPocketBook() then
+elseif Device:isCervantes() or Device:isKindle() or Device:isPocketBook() then
     command = "ntpdate pool.ntp.org"
 else
     return { disabled = true, }
@@ -24,17 +24,16 @@ local TimeSync = WidgetContainer:new{
 local function currentTime()
     local std_out = io.popen("date")
     if std_out then
-        local result = std_out:read("*all")
+        local result = std_out:read("*line")
         std_out:close()
         if result ~= nil then
-            result = result:gsub("\n", "")
             return T(_("New time is %1."), result)
         end
     end
     return _("Time synchronized.")
 end
 
-local function execute()
+local function syncNTP()
     local info = InfoMessage:new{
         text = _("Synchronizing time. This may take several seconds.")
     }
@@ -56,12 +55,9 @@ end
 
 local menuItem = {
     text = _("Synchronize time"),
+    keep_menu_open = true,
     callback = function()
-        if NetworkMgr:isOnline() then
-            execute()
-        else
-            NetworkMgr:promptWifiOn()
-        end
+        NetworkMgr:runWhenOnline(function() syncNTP() end)
     end
 }
 

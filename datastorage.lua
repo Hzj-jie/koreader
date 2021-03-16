@@ -11,12 +11,15 @@ function DataStorage:getDataDir()
     if data_dir then return data_dir end
 
     if isAndroid then
-        data_dir = android.externalStorage() .. "/koreader"
+        data_dir = android.getExternalStoragePath() .. "/koreader"
     elseif os.getenv("UBUNTU_APPLICATION_ISOLATION") then
         local app_id = os.getenv("APP_ID")
         local package_name = app_id:match("^(.-)_")
-        -- confinded ubuntu app has write access to this dir
+        -- confined ubuntu app has write access to this dir
         data_dir = string.format("%s/%s", os.getenv("XDG_DATA_HOME"), package_name)
+    elseif os.getenv("APPIMAGE") or os.getenv("KO_MULTIUSER") then
+        local user_rw = jit.os == "OSX" and "Library/Application Support" or ".config"
+        data_dir = string.format("%s/%s/%s", os.getenv("HOME"), user_rw, "koreader")
     else
         data_dir = "."
     end
@@ -52,8 +55,8 @@ local function initDataDir()
     local sub_data_dirs = {
         "cache", "clipboard",
         "data", "data/dict", "data/tessdata",
-        "history",
-        "ota", "screenshots", "settings",
+        "history", "ota", "plugins",
+        "screenshots", "settings", "styletweaks",
     }
     for _, dir in ipairs(sub_data_dirs) do
         local sub_data_dir = string.format("%s/%s", DataStorage:getDataDir(), dir)

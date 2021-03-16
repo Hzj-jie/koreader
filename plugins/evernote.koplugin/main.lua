@@ -1,3 +1,4 @@
+local BD = require("ui/bidi")
 local InputContainer = require("ui/widget/container/inputcontainer")
 local LoginDialog = require("ui/widget/logindialog")
 local InfoMessage = require("ui/widget/infomessage")
@@ -5,16 +6,17 @@ local NetworkMgr = require("ui/network/manager")
 local DataStorage = require("datastorage")
 local DocSettings = require("docsettings")
 local UIManager = require("ui/uimanager")
-local ConfirmBox = require("ui/widget/confirmbox")
 local Screen = require("device").screen
+local logger = require("logger")
 local util = require("ffi/util")
 local Device = require("device")
-local DEBUG = require("dbg")
-local T = require("ffi/util").template
+local JoplinClient = require("JoplinClient")
+local T = util.template
 local _ = require("gettext")
+local N_ = _.ngettext
 local slt2 = require('slt2')
 local MyClipping = require("clip")
-local realpath = require("ffi/util").realpath
+local json = require("json")
 
 local EvernoteExporter = InputContainer:new{
     name = "evernote",
@@ -30,16 +32,32 @@ local EvernoteExporter = InputContainer:new{
 
 function EvernoteExporter:init()
     self.text_clipping_file = self.clipping_dir .. "/KOReaderClipping.txt"
+    self.json_clipping_file = self.clipping_dir .. "/KOReaderClipping.json"
     local settings = G_reader_settings:readSetting("evernote") or {}
     self.evernote_domain = settings.domain
     self.evernote_username = settings.username or ""
     self.evernote_token = settings.token
     self.notebook_guid = settings.notebook
+    self.joplin_IP = settings.joplin_IP or "localhost"
+    self.joplin_port = settings.joplin_port or 41185
+    self.joplin_token = settings.joplin_token -- or your token
+    self.joplin_notebook_guid = settings.joplin_notebook_guid or nil
     self.html_export = settings.html_export or false
+    self.joplin_export = settings.joplin_export or false
+    self.txt_export = settings.txt_export or false
+    self.json_export = settings.json_export or false
+    --- @todo Is this if block necessary? Nowhere in the code they are assigned both true.
+    -- Do they check against external modifications to settings file?
+
     if self.html_export then
         self.txt_export = false
-    else
-        self.txt_export = settings.txt_export or false
+        self.joplin_export = false
+        self.json_export = false
+    elseif self.txt_export then
+        self.joplin_export = false
+        self.json_export = false
+    elseif self.json_export then
+        self.joplin_export = false
     end
 
     self.parser = MyClipping:new{
@@ -58,10 +76,15 @@ function EvernoteExporter:isDocless()
 end
 
 function EvernoteExporter:readyToExport()
-    return self.evernote_token ~= nil or self.html_export ~= false or self.txt_export ~= false
+    return self.evernote_token ~= nil or
+            self.html_export ~= false or
+            self.txt_export ~= false or
+            self.json_export ~= false or
+            self.joplin_export ~= false
 end
 
 function EvernoteExporter:migrateClippings()
+    if jit.os == "OSX" then return end
     local old_dir = util.joinPath(util.realpath(util.joinPath(self.path, "..")),
         "evernote.sdr")
     if lfs.attributes(old_dir, "mode") == "directory" then
@@ -111,6 +134,131 @@ function EvernoteExporter:addToMainMenu(menu_items)
                 end,
             },
             {
+                text = _("Joplin") ,
+                checked_func = function() return self.joplin_export end,
+                separator = true,
+                sub_item_table ={
+                    {
+                        text = _("Set Joplin IP and Port"),
+                        keep_menu_open = true,
+                        callback = function()
+                            local MultiInputDialog = require("ui/widget/multiinputdialog")
+                            local url_dialog
+                            url_dialog = MultiInputDialog:new{
+                                title = _("Set Joplin IP and port number"),
+                                fields = {
+                                    {
+                                        text = self.joplin_IP,
+                                        input_type = "string"
+                                    },
+                                    {
+                                        text = self.joplin_port,
+                                        input_type = "number"
+                                    }
+                                },
+                                buttons = {
+                                    {
+                                        {
+                                            text = _("Cancel"),
+                                            callback = function()
+                                                UIManager:close(url_dialog)
+                                            end
+                                        },
+                                        {
+                                            text = _("OK"),
+                                            callback = function()
+                                                local fields = url_dialog:getFields()
+                                                local ip = fields[1]
+                                                local port = tonumber(fields[2])
+                                                if ip ~= "" then
+                                                    if port and port < 65355 then
+                                                        self.joplin_IP = ip
+                                                        self.joplin_port = port
+                                                    end
+                                                    self:saveSettings()
+                                                end
+                                                UIManager:close(url_dialog)
+                                            end
+                                        }
+                                    }
+                                }
+                            }
+                            UIManager:show(url_dialog)
+                            url_dialog:onShowKeyboard()
+                        end
+                    },
+                    {
+                        text = _("Set authorization token"),
+                        keep_menu_open = true,
+                        callback = function()
+                            local MultiInputDialog = require("ui/widget/multiinputdialog")
+                            local auth_dialog
+                            auth_dialog = MultiInputDialog:new{
+                                title = _("Set authorization token for Joplin"),
+                                fields = {
+                                    {
+                                        text = self.joplin_token,
+                                        input_type = "string"
+                                    }
+                                },
+                                buttons = {
+                                    {
+                                        {
+                                            text = _("Cancel"),
+                                            callback = function()
+                                                UIManager:close(auth_dialog)
+                                            end
+                                        },
+                                        {
+                                            text = _("Set token"),
+                                            callback = function()
+                                                local auth_field = auth_dialog:getFields()
+                                                self.joplin_token = auth_field[1]
+                                                self:saveSettings()
+                                                UIManager:close(auth_dialog)
+                                            end
+                                        }
+                                    }
+                                }
+                            }
+                            UIManager:show(auth_dialog)
+                            auth_dialog:onShowKeyboard()
+                        end
+                    },
+                    {
+                        text = _("Export to Joplin"),
+                        checked_func = function() return self.joplin_export end,
+                        callback = function()
+                            self.joplin_export = not self.joplin_export
+                            if self.joplin_export then
+                                self.html_export = false
+                                self.txt_export = false
+                                self.json_export = false
+                            end
+                            self:saveSettings()
+                        end
+                    },
+                    {
+                        text = _("Help"),
+                        keep_menu_open = true,
+                        callback = function()
+                            UIManager:show(InfoMessage:new{
+                                text = T(_([[You can enter your auth token on your computer by saving an empty token. Then quit KOReader, edit the evernote.joplin_token field in %1/settings.reader.lua after creating a backup, and restart KOReader once you're done.
+
+To export to Joplin, you must forward the IP and port used by this plugin to the localhost:port on which Joplin is listening. This can be done with socat or a similar program. For example:
+
+For Windows: netsh interface portproxy add v4tov4 listenaddress=0.0.0.0 listenport=41185 connectaddress=localhost connectport=41184
+
+For Linux: $socat tcp-listen:41185,reuseaddr,fork tcp:localhost:41184
+
+For more information, please visit https://github.com/koreader/koreader/wiki/Evernote-export.]])
+                            , BD.dirpath(DataStorage:getDataDir()))
+                            })
+                        end
+                    }
+                }
+            },
+            {
                 text = _("Export all notes in this book"),
                 enabled_func = function()
                     return not self:isDocless() and self:readyToExport() and not self.txt_export
@@ -140,6 +288,20 @@ function EvernoteExporter:addToMainMenu(menu_items)
                         text = _("Exporting may take several minutes…"),
                         timeout = 1,
                     })
+                end,
+                separator = true,
+            },
+            {
+                text = _("Export to local JSON files"),
+                checked_func = function() return self.json_export end,
+                callback = function()
+                    self.json_export = not self.json_export
+                    if self.json_export then
+                        self.txt_export = false
+                        self.html_export = false
+                        self.joplin_export = false
+                    end
+                    self:saveSettings()
                 end
             },
             {
@@ -147,7 +309,11 @@ function EvernoteExporter:addToMainMenu(menu_items)
                 checked_func = function() return self.html_export end,
                 callback = function()
                     self.html_export = not self.html_export
-                    if self.html_export then self.txt_export = false end
+                    if self.html_export then
+                        self.txt_export = false
+                        self.json_export = false
+                        self.joplin_export = false
+                    end
                     self:saveSettings()
                 end
             },
@@ -156,21 +322,22 @@ function EvernoteExporter:addToMainMenu(menu_items)
                 checked_func = function() return self.txt_export end,
                 callback = function()
                     self.txt_export = not self.txt_export
-                    if self.txt_export then self.html_export = false end
+                    if self.txt_export then
+                        self.html_export = false
+                        self.json_export = false
+                        self.joplin_export = false
+                    end
                     self:saveSettings()
-                end
+                end,
+                separator = true,
             },
             {
                 text = _("Purge history records"),
                 callback = function()
                     self.config:purge()
-                    UIManager:show(ConfirmBox:new{
-                        text = _("History records have been purged.\nAll notes will be exported again next time.\nWould you like to remove the existing KOReaderClipping.txt file to avoid duplication?\nRecords will be appended to KOReaderClipping.txt instead of being overwritten."),
-                        ok_text = _("Yes, remove it"),
-                        ok_callback = function()
-                            os.remove(self.text_clipping_file)
-                        end,
-                        cancel_text = _("No, keep it"),
+                    UIManager:show(InfoMessage:new{
+                        text = _("History records have been purged.\nAll notes will be exported again next time.\n"),
+                        timeout = 2,
                     })
                 end
             }
@@ -179,9 +346,10 @@ function EvernoteExporter:addToMainMenu(menu_items)
 end
 
 function EvernoteExporter:login()
-    if not NetworkMgr:isOnline() then
-        NetworkMgr:promptWifiOn()
+    if NetworkMgr:willRerunWhenOnline(function() self:login() end) then
+        return
     end
+
     self.login_dialog = LoginDialog:new{
         title = self.login_title,
         username = self.evernote_username or "",
@@ -212,12 +380,12 @@ function EvernoteExporter:login()
                 },
             },
         },
-        width = Screen:getWidth() * 0.8,
-        height = Screen:getHeight() * 0.4,
+        width = math.floor(Screen:getWidth() * 0.8),
+        height = math.floor(Screen:getHeight() * 0.4),
     }
 
-    self.login_dialog:onShowKeyboard()
     UIManager:show(self.login_dialog)
+    self.login_dialog:onShowKeyboard()
 end
 
 function EvernoteExporter:closeDialog()
@@ -237,10 +405,11 @@ function EvernoteExporter:doLogin(username, password)
         domain = self.evernote_domain,
         username = username,
         password = password,
+        logger = logger.dbg,
     }
     self.evernote_username = username
     local ok, token = pcall(oauth.getToken, oauth)
-    -- prompt users to turn on Wifi if network is unreachable
+    -- prompt users to turn on Wi-Fi if network is unreachable
     if not ok and token then
         UIManager:show(InfoMessage:new{
             text = _("An error occurred while logging in:") .. "\n" .. token,
@@ -255,7 +424,8 @@ function EvernoteExporter:doLogin(username, password)
     local guid
     ok, guid = pcall(self.getExportNotebook, self, client)
     if not ok and guid and guid:find("Transport not open") then
-        NetworkMgr:promptWifiOn()
+        --- @note: No recursive callback because it feels fishy here...
+        NetworkMgr:beforeWifiAction()
         return
     elseif not ok and guid then
         UIManager:show(InfoMessage:new{
@@ -287,6 +457,12 @@ function EvernoteExporter:saveSettings()
         notebook = self.notebook_guid,
         html_export = self.html_export,
         txt_export = self.txt_export,
+        json_export = self.json_export,
+        joplin_IP = self.joplin_IP,
+        joplin_port = self.joplin_port,
+        joplin_token = self.joplin_token,
+        joplin_notebook_guid = self.joplin_notebook_guid,
+        joplin_export = self.joplin_export
     }
     G_reader_settings:saveSetting("evernote", settings)
 end
@@ -312,7 +488,7 @@ function EvernoteExporter:updateHistoryClippings(clippings, new_clippings)
                     or clippings[title][chapter_index][note_index].time ~= note.time
                     or clippings[title][chapter_index][note_index].text ~= note.text
                     or clippings[title][chapter_index][note_index].note ~= note.note then
-                    DEBUG("found new notes in history", booknotes.title)
+                    logger.dbg("found new notes in history", booknotes.title)
                     clippings[title] = booknotes
                 end
             end
@@ -326,13 +502,30 @@ function EvernoteExporter:updateMyClippings(clippings, new_clippings)
     -- since appending is the only way to modify notes in My Clippings
     for title, booknotes in pairs(new_clippings) do
         if clippings[title] == nil or #clippings[title] < #booknotes then
-            DEBUG("found new notes in MyClipping", booknotes.title)
+            logger.dbg("found new notes in MyClipping", booknotes.title)
             clippings[title] = booknotes
         end
     end
     return clippings
 end
 
+--[[--
+Parses highlights and calls exporter functions.
+
+Entry point for exporting highlights. User interface calls this function.
+Parses current document and documents from history, passes them to exportClippings().
+Highlight: Highlighted text or image in document, stored in "highlights" table in
+documents sidecar file. Parser uses this table. If highlight._._.text field is empty parser uses
+highlight._._.pboxes field to get an image instead.
+Bookmarks: Data in bookmark explorer. Stored in "bookmarks" table of documents sidecar file. Every
+field in bookmarks._ has "text" and "notes" fields When user edits a highlight or "renames" bookmark,
+text field is created or updated. Parser looks to bookmarks._.text field for edited notes. bookmarks._.notes isn't used for exporting operations.
+https://github.com/koreader/koreader/blob/605f6026bbf37856ee54741b8a0697337ca50039/plugins/evernote.koplugin/clip.lua#L229
+Clippings: Parsed form of highlights, stored in clipboard/evernote.sdr/metadata.sdr.lua
+for all documents. Used only for exporting bookmarks. Internal highlight or bookmark functions
+does not use this table.
+Booknotes: Every table in clippings table. clippings = {"title" = booknotes}
+--]]
 function EvernoteExporter:exportAllNotes()
     -- Flush highlights of current document.
     if not self:isDocless() then
@@ -348,7 +541,7 @@ function EvernoteExporter:exportAllNotes()
             clippings[title] = nil
         end
     end
-    --DEBUG("clippings", clippings)
+    --logger.dbg("clippings", clippings)
     self:exportClippings(clippings)
     self.config:saveSetting("clippings", clippings)
     self.config:flush()
@@ -357,7 +550,8 @@ end
 function EvernoteExporter:exportClippings(clippings)
     local client = nil
     local exported_stamp
-    if not self.html_export and not self.txt_export then
+    local joplin_client
+    if not (self.html_export or self.txt_export or self.joplin_export or self.json_export) then
         client = require("EvernoteClient"):new{
             domain = self.evernote_domain,
             authToken = self.evernote_token,
@@ -365,8 +559,24 @@ function EvernoteExporter:exportClippings(clippings)
         exported_stamp = self.notebook_guid
     elseif self.html_export then
         exported_stamp= "html"
+    elseif self.json_export then
+        exported_stamp= "json"
     elseif self.txt_export then
+        os.remove(self.text_clipping_file)
         exported_stamp = "txt"
+    elseif self.joplin_export then
+        exported_stamp = "joplin"
+        joplin_client = JoplinClient:new{
+            server_ip = self.joplin_IP,
+            server_port = self.joplin_port,
+            auth_token = self.joplin_token
+        }
+        ---@todo Check if user deleted our notebook, in that case note
+        -- will end up in random folder in Joplin.
+        if not self.joplin_notebook_guid then
+            self.joplin_notebook_guid = joplin_client:createNotebook(self.notebook_name)
+            self:saveSettings()
+        end
     else
         assert("an exported_stamp is expected for a new export type")
     end
@@ -379,25 +589,31 @@ function EvernoteExporter:exportClippings(clippings)
         end
         -- check if booknotes are exported in this notebook
         -- so that booknotes will still be exported after switching user account
-        if booknotes.exported[exported_stamp] ~= true then
+        -- Don't respect exported_stamp on txt export since it isn't possible to delete(update) prior clippings.
+        if booknotes.exported[exported_stamp] ~= true or self.txt_export or self.json_export then
             local ok, err
             if self.html_export then
                 ok, err = pcall(self.exportBooknotesToHTML, self, title, booknotes)
             elseif self.txt_export then
                 ok, err = pcall(self.exportBooknotesToTXT, self, title, booknotes)
+            elseif self.json_export then
+                ok, err = pcall(self.exportBooknotesToJSON, self, title, booknotes)
+            elseif self.joplin_export then
+                ok, err = pcall(self.exportBooknotesToJoplin, self, joplin_client, title, booknotes)
             else
                 ok, err = pcall(self.exportBooknotesToEvernote, self, client, title, booknotes)
             end
-            -- error reporting
+            -- Error reporting
             if not ok and err and err:find("Transport not open") then
-                NetworkMgr:promptWifiOn()
+                --- @note: No recursive callback because it feels fishy here...
+                NetworkMgr:beforeWifiAction()
                 return
             elseif not ok and err then
-                DEBUG("Error occurs when exporting book:", title, err)
+                logger.dbg("Error while exporting book", title, err)
                 error_count = error_count + 1
                 error_title = title
             elseif ok then
-                DEBUG("Exported notes in book:", title)
+                logger.dbg("Exported notes in book:", title)
                 export_count = export_count + 1
                 export_title = title
                 booknotes.exported[exported_stamp] = true
@@ -408,28 +624,24 @@ function EvernoteExporter:exportClippings(clippings)
     local msg = "Nothing was exported."
     local all_count = export_count + error_count
     if export_count > 0 and error_count == 0 then
-        if all_count == 1 then
-            msg = _("Exported notes from book:") .. "\n" .. export_title
-        else
-            msg = T(
-                _("Exported notes from book:\n%1\nand %2 others."),
-                export_title,
-                all_count-1
-            )
-        end
+        msg = T(
+            N_("Exported notes from the book:\n%1",
+               "Exported notes from the book:\n%1\nand %2 others.",
+               all_count-1),
+            export_title,
+            all_count-1
+        )
     elseif error_count > 0 then
-        if all_count == 1 then
-            msg = _("An error occurred while trying to export notes from book:") .. "\n" .. error_title
-        else
-            msg = T(
-                _("Multiple errors occurred while trying to export notes from book:\n%1\nand %2 others."),
-                error_title,
-                error_count-1
-            )
-        end
+        msg = T(
+            N_("An error occurred while trying to export notes from the book:\n%1",
+               "Multiple errors occurred while trying to export notes from the book:\n%1\nand %2 others.",
+               error_count-1),
+            error_title,
+            error_count-1
+        )
     end
     if (self.html_export or self.txt_export) and export_count > 0 then
-        msg = msg .. T(_("\nNotes can be found in %1/."), realpath(self.clipping_dir))
+        msg = msg .. T(_("\nNotes can be found in %1/."), BD.dirpath(util.realpath(self.clipping_dir)))
     end
     UIManager:show(InfoMessage:new{ text = msg })
 end
@@ -439,7 +651,7 @@ function EvernoteExporter:exportBooknotesToEvernote(client, title, booknotes)
         booknotes = booknotes,
         notemarks = self.notemarks,
     })
-    --DEBUG("content", content)
+    --logger.dbg("content", content)
     local note_guid = client:findNoteByTitle(title, self.notebook_guid)
     local resources = {}
     for _, chapter in ipairs(booknotes) do
@@ -465,7 +677,7 @@ function EvernoteExporter:exportBooknotesToHTML(title, booknotes)
         booknotes = booknotes,
         notemarks = self.notemarks,
     })
-    --DEBUG("content", content)
+    --logger.dbg("content", content)
     local html = io.open(self.clipping_dir .. "/" .. title .. ".html", "w")
     if html then
         html:write(content)
@@ -473,10 +685,18 @@ function EvernoteExporter:exportBooknotesToHTML(title, booknotes)
     end
 end
 
+function EvernoteExporter:exportBooknotesToJSON(title, booknotes)
+    local file = io.open(self.json_clipping_file, "a")
+    if file then
+        file:write(json.encode(booknotes))
+        file:write("\n")
+        file:close()
+    end
+end
+
 function EvernoteExporter:exportBooknotesToTXT(title, booknotes)
     -- Use wide_space to avoid crengine to treat it specially.
     local wide_space = "\227\128\128"
-    local file_modification = lfs.attributes(self.text_clipping_file, "modification") or 0
     local file = io.open(self.text_clipping_file, "a")
     if file then
         file:write(title .. "\n" .. wide_space .. "\n")
@@ -485,25 +705,48 @@ function EvernoteExporter:exportBooknotesToTXT(title, booknotes)
                 file:write(wide_space .. chapter.title .. "\n" .. wide_space .. "\n")
             end
             for _ignore2, clipping in ipairs(chapter) do
-                -- If this clipping has already been exported, we ignore it.
-                if clipping.time >= file_modification then
-                    file:write(wide_space .. wide_space ..
-                               T(_("-- Page: %1, added on %2\n"),
-                                 clipping.page, os.date("%c", clipping.time)))
-                    if clipping.text then
-                        file:write(clipping.text)
-                    end
-                    if clipping.image then
-                        file:write(_("<An image>"))
-                    end
-                    file:write("\n-=-=-=-=-=-\n")
+                file:write(wide_space .. wide_space ..
+                            T(_("-- Page: %1, added on %2\n"),
+                                clipping.page, os.date("%c", clipping.time)))
+                if clipping.text then
+                    file:write(clipping.text)
                 end
+                if clipping.image then
+                    file:write(_("<An image>"))
+                end
+                file:write("\n-=-=-=-=-=-\n")
             end
         end
 
         file:write("\n")
         file:close()
     end
+end
+
+function EvernoteExporter:exportBooknotesToJoplin(client, title, booknotes)
+    if not client:ping() then
+        error("Cannot reach Joplin server")
+    end
+
+    local note_guid = client:findNoteByTitle(title, self.joplin_notebook_guid)
+    local note = ""
+    for _, chapter in ipairs(booknotes) do
+        if chapter.title then
+            note = note .. "\n\t*" .. chapter.title .. "*\n\n * * *"
+        end
+
+        for _, clipping in ipairs(chapter) do
+            note = note .. os.date("%Y-%m-%d %H:%M:%S \n", clipping.time)
+            note = note .. clipping.text .. "\n * * *\n"
+        end
+    end
+
+    if note_guid then
+        client:updateNote(note_guid, note)
+    else
+        client:createNote(title, note, self.joplin_notebook_guid)
+    end
+
 end
 
 return EvernoteExporter

@@ -2,10 +2,10 @@ local InputContainer = require("ui/widget/container/inputcontainer")
 local GoodreadsBook = require("goodreadsbook")
 local InfoMessage = require("ui/widget/infomessage")
 local UIManager = require("ui/uimanager")
-local url = require('socket.url')
-local socket = require('socket')
-local https = require('ssl.https')
-local ltn12 = require('ltn12')
+local http = require("socket.http")
+local ltn12 = require("ltn12")
+local socket = require("socket")
+local socketutil = require("socketutil")
 local _ = require("gettext")
 
 local GoodreadsApi = InputContainer:new {
@@ -42,14 +42,15 @@ local function genIdUrl(id, userApi)
 end
 
 function GoodreadsApi:fetchXml(s_url)
-    local request, sink = {}, {}
-    local parsed = url.parse(s_url)
-    request['url'] = s_url
-    request['method'] = 'GET'
-    request['sink'] = ltn12.sink.table(sink)
-    https.TIMEOUT = 5
-    local httpsRequest = parsed.scheme == 'https' and https.request
-    local headers = socket.skip(1, httpsRequest(request))
+    local sink = {}
+    socketutil:set_timeout()
+    local request = {
+        url     = s_url,
+        method  = "GET",
+        sink    = ltn12.sink.table(sink),
+    }
+    local headers = socket.skip(2, http.request(request))
+    socketutil:reset_timeout()
     if headers == nil then
         return nil
     end
@@ -88,28 +89,6 @@ function GoodreadsApi:getTotalResults()
     return self.total_result
 end
 
-local function cleanHTMLTags(str_html)
-    local cleaner = {
-        { "&amp;", "&" },
-        { "&#151;", "-" },
-        { "&#146;", "'" },
-        { "&#160;", " " },
-        { "<!%[CDATA%[(.*)%]%]>", "%1" },
-        { "<br%s/>", "\n" },
-        { "%-%-", "%-" },
-        { "</p>", "\n" },
-        { "(%b<>)", "" },
-        { "\n\n*", "\n" },
-        { "\n*$", "" },
-        { "^\n*", "" },
-    }
-    for i=1, #cleaner do
-        local cleans = cleaner[i]
-        str_html = string.gsub(str_html, cleans[1], cleans[2])
-    end
-    return str_html
-end
-
 local function showIdTable(data)
     if data == nil then
         UIManager:show(InfoMessage:new{text =_("Network problem.\nCheck connection.")})
@@ -132,7 +111,8 @@ local function showIdTable(data)
     local id = data1:match("<id>([^<]+)</id>"):gsub("<![[]CDATA[[]", ""):gsub("]]>$", "")
     local author = data1:match("<name>([^<]+)</name>")
     local description = data1:match("<description>(.*)</description>")
-    description = cleanHTMLTags(description)
+    description = string.gsub(description, "<!%[CDATA%[(.*)%]%]>", "%1")
+    description = string.gsub(description, "%-%-", "%—")
     --change format from medium to large
     local image = data1:match("<image_url>([^<]+)</image_url>"):gsub("([0-9]+)m/", "%1l/")
     local day = data1:match("<original_publication_day[^>]+>([^<]+)</original_publication_day>")

@@ -14,6 +14,7 @@ Example:
 
 ]]
 
+local Blitbuffer = require("ffi/blitbuffer")
 local CheckMark = require("ui/widget/checkmark")
 local Device = require("device")
 local Font = require("ui/font")
@@ -31,9 +32,11 @@ local CheckButton = InputContainer:new{
     checked = false,
     enabled = true,
     face = Font:getFace("cfont"),
+    background = Blitbuffer.COLOR_WHITE,
     overlap_align = "right",
     text = nil,
     toggle_text = nil,
+    max_width = nil,
     window = nil,
 
     padding = Screen:scaleBySize(5),
@@ -49,10 +52,15 @@ function CheckButton:initCheckButton(checked)
     self.checked = checked
     self._checkmark = CheckMark:new{
         checked = self.checked,
+        enabled = self.enabled,
+        parent = self.parent or self,
+        show_parent = self.show_parent or self,
     }
     self._textwidget = TextWidget:new{
         text = self.text,
         face = self.face,
+        max_width = self.max_width,
+        fgcolor = self.enabled and Blitbuffer.COLOR_BLACK or Blitbuffer.COLOR_DARK_GRAY,
     }
     self._horizontalgroup = HorizontalGroup:new{
         self._checkmark,
@@ -60,12 +68,14 @@ function CheckButton:initCheckButton(checked)
     }
     self._frame = FrameContainer:new{
         bordersize = 0,
+        background = self.background,
         margin = 0,
         padding = 0,
         self._horizontalgroup,
     }
-    self[1] = self._frame
     self.dimen = self._frame:getSize()
+    self[1] = self._frame
+
     if Device:isTouchDevice() then
         self.ges_events = {
             TapCheckButton = {
@@ -91,19 +101,33 @@ function CheckButton:onTapCheckButton()
         if G_reader_settings:isFalse("flash_ui") then
             self.callback()
         else
-            UIManager:scheduleIn(0.0, function()
-                self.invert = true
-                UIManager:setDirty(self.show_parent, function()
-                    return "ui", self.dimen
-                end)
-            end)
-            UIManager:scheduleIn(0.1, function()
-                self.callback()
-                self.invert = false
-                UIManager:setDirty(self.show_parent, function()
-                    return "ui", self.dimen
-                end)
-            end)
+            -- c.f., ui/widget/iconbutton for the canonical documentation about the flash_ui code flow
+
+            -- Unlike RadioButton, the frame's width stops at the text width, but we want our highlight to span the full width...
+            -- (That's when we have one, some callers don't pass a width, so, handle that, too).
+            local highlight_dimen = self.dimen
+            highlight_dimen.w = self.width and self.width or self.dimen.w
+
+            -- Highlight
+            --
+            self[1].invert = true
+            UIManager:widgetInvert(self[1], highlight_dimen.x, highlight_dimen.y, highlight_dimen.w)
+            UIManager:setDirty(nil, "fast", highlight_dimen)
+
+            UIManager:forceRePaint()
+            UIManager:yieldToEPDC()
+
+            -- Unhighlight
+            --
+            self[1].invert = false
+            UIManager:widgetInvert(self[1], highlight_dimen.x, highlight_dimen.y, highlight_dimen.w)
+            UIManager:setDirty(nil, "ui", highlight_dimen)
+
+            -- Callback
+            --
+            self.callback()
+
+            UIManager:forceRePaint()
         end
     elseif self.tap_input then
         self:onInput(self.tap_input)
@@ -127,14 +151,30 @@ end
 function CheckButton:check()
     self:initCheckButton(true)
     UIManager:setDirty(self.parent, function()
-        return "partial", self.dimen
+        return "ui", self.dimen
     end)
 end
 
 function CheckButton:unCheck()
     self:initCheckButton(false)
     UIManager:setDirty(self.parent, function()
-        return "partial", self.dimen
+        return "ui", self.dimen
+    end)
+end
+
+function CheckButton:enable()
+    self.enabled = true
+    self:initCheckButton(self.checked)
+    UIManager:setDirty(self.parent, function()
+        return "ui", self.dimen
+    end)
+end
+
+function CheckButton:disable()
+    self.enabled = false
+    self:initCheckButton(false)
+    UIManager:setDirty(self.parent, function()
+        return "ui", self.dimen
     end)
 end
 

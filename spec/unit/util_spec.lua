@@ -6,14 +6,14 @@ describe("util module", function()
         util = require("util")
     end)
 
-    it("should strip punctuations around word", function()
-        assert.is_equal("hello world", util.stripePunctuations("\"hello world\""))
-        assert.is_equal("hello world", util.stripePunctuations("\"hello world?\""))
-        assert.is_equal("hello, world", util.stripePunctuations("\"hello, world?\""))
-        assert.is_equal("你好", util.stripePunctuations("“你好“"))
-        assert.is_equal("你好", util.stripePunctuations("“你好?“"))
-        assert.is_equal("", util.stripePunctuations(""))
-        assert.is_nil(util.stripePunctuations(nil))
+    it("should strip punctuation marks around word", function()
+        assert.is_equal("hello world", util.stripPunctuation("\"hello world\""))
+        assert.is_equal("hello world", util.stripPunctuation("\"hello world?\""))
+        assert.is_equal("hello, world", util.stripPunctuation("\"hello, world?\""))
+        assert.is_equal("你好", util.stripPunctuation("“你好“"))
+        assert.is_equal("你好", util.stripPunctuation("“你好?“"))
+        assert.is_equal("", util.stripPunctuation(""))
+        assert.is_nil(util.stripPunctuation(nil))
     end)
 
     describe("gsplit()", function()
@@ -31,9 +31,9 @@ describe("util module", function()
             for arg1 in util.gsplit(command, "[\"'].-[\"']", true) do
                 for arg2 in util.gsplit(arg1, "^[^\"'].-%s+", true) do
                     for arg3 in util.gsplit(arg2, "[\"']", false) do
-                        local trimed = arg3:gsub("^%s*(.-)%s*$", "%1")
-                        if trimed ~= "" then
-                            table.insert(argv, trimed)
+                        local trimmed = util.trim(arg3)
+                        if trimmed ~= "" then
+                            table.insert(argv, trimmed)
                         end
                     end
                 end
@@ -239,6 +239,21 @@ describe("util module", function()
         assert.are_same("a", util.splitFileNameSuffix("a.txt"))
     end)
 
+    describe("getSafeFileName()", function()
+        it("should replace unsafe characters", function()
+            assert.is_equal("___", util.getSafeFilename("|||"))
+        end)
+        it("should truncate any characters beyond the limit", function()
+            assert.is_equal("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", util.getSafeFilename("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"))
+        end)
+        it("should truncate extension beyond the limit", function()
+            assert.is_equal("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", util.getSafeFilename("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"))
+        end)
+        it("should strip HTML from the filename", function()
+            assert.is_equal("lalala", util.getSafeFilename("<span>lalala</span>"))
+        end)
+    end)
+
     describe("fixUtf8()", function()
         it("should replace invalid UTF-8 characters with an underscore", function()
             assert.is_equal("\127 _ _\127 ", util.fixUtf8("\127 \128 \194\127 ", "_"))
@@ -313,6 +328,58 @@ describe("util module", function()
         end)
     end)
 
+    describe("getFriendlySize()", function()
+        describe("should convert bytes to friendly size as string", function()
+            it("to 100.0 GB", function()
+                assert.is_equal("100.0 GB",
+                                util.getFriendlySize(100*1000*1000*1000))
+            end)
+            it("to 1.0 GB", function()
+                assert.is_equal("1.0 GB",
+                                util.getFriendlySize(1000*1000*1000+1))
+            end)
+            it("to 1.0 MB", function()
+                assert.is_equal("1.0 MB",
+                                util.getFriendlySize(1000*1000+1))
+            end)
+            it("to 1.0 kB", function()
+                assert.is_equal("1.0 kB",
+                                util.getFriendlySize(1000+1))
+            end)
+            it("to B", function()
+                assert.is_equal("10 B",
+                                util.getFriendlySize(10))
+            end)
+            it("to 100.0 GB with minimum field width alignment", function()
+                assert.is_equal(" 100.0 GB",
+                                util.getFriendlySize(100*1000*1000*1000, true))
+            end)
+            it("to 1.0 GB with minimum field width alignment", function()
+                assert.is_equal("   1.0 GB",
+                                util.getFriendlySize(1000*1000*1000+1, true))
+            end)
+            it("to 1.0 MB with minimum field width alignment", function()
+                assert.is_equal("   1.0 MB",
+                                util.getFriendlySize(1000*1000+1, true))
+            end)
+            it("to 1.0 kB with minimum field width alignment", function()
+                assert.is_equal("   1.0 kB",
+                                util.getFriendlySize(1000+1, true))
+            end)
+            it("to B with minimum field width alignment", function()
+                assert.is_equal("    10 B",
+                                util.getFriendlySize(10, true))
+            end)
+        end)
+        it("should return nil when input is nil or false", function()
+            assert.is_nil(util.getFriendlySize(nil))
+            assert.is_nil(util.getFriendlySize(false))
+        end)
+        it("should return nil when input is not a number", function()
+            assert.is_nil(util.getFriendlySize("a string"))
+        end)
+    end)
+
     describe("secondsToClock()", function()
         it("should convert seconds to 00:00 format", function()
             assert.is_equal("00:00",
@@ -351,6 +418,94 @@ describe("util module", function()
                             util.secondsToClock(110))
             assert.is_equal("00:02:00",
                             util.secondsToClock(120))
+        end)
+    end)
+
+    describe("secondsToHClock()", function()
+        it("should convert seconds to 0'00'' format", function()
+            assert.is_equal("0'",
+                            util.secondsToHClock(0, true))
+            assert.is_equal("0'",
+                            util.secondsToHClock(29, true))
+            assert.is_equal("1'",
+                            util.secondsToHClock(60, true))
+        end)
+        it("should round seconds to minutes in 0h00' format", function()
+            assert.is_equal("1'",
+                            util.secondsToHClock(89, true))
+            assert.is_equal("2'",
+                            util.secondsToHClock(90, true))
+            assert.is_equal("2'",
+                            util.secondsToHClock(110, true))
+            assert.is_equal("2'",
+                            util.secondsToHClock(120, true))
+            assert.is_equal("1h00",
+                            util.secondsToHClock(3600, true))
+            assert.is_equal("1h00",
+                            util.secondsToHClock(3599, true))
+            assert.is_equal("1h00",
+                            util.secondsToHClock(3570, true))
+            assert.is_equal("59'",
+                            util.secondsToHClock(3569, true))
+            assert.is_equal("10h01",
+                            util.secondsToHClock(36060, true))
+        end)
+        it("should round seconds to minutes in 0h00m format", function()
+            assert.is_equal("1m",
+                util.secondsToHClock(89, true, true))
+            assert.is_equal("2m",
+                util.secondsToHClock(90, true, true))
+            assert.is_equal("2m",
+                util.secondsToHClock(110, true, true))
+            assert.is_equal("1h00",
+                util.secondsToHClock(3600, true, true))
+            assert.is_equal("1h00",
+                util.secondsToHClock(3599, true, true))
+            assert.is_equal("59m",
+                util.secondsToHClock(3569, true, true))
+            assert.is_equal("10h01",
+                util.secondsToHClock(36060, true, true))
+        end)
+        it("should convert seconds to 0h00'00'' format", function()
+            assert.is_equal("0''",
+                            util.secondsToHClock(0))
+            assert.is_equal("1'00''",
+                            util.secondsToHClock(60))
+            assert.is_equal("1'29''",
+                            util.secondsToHClock(89))
+            assert.is_equal("1'30''",
+                            util.secondsToHClock(90))
+            assert.is_equal("1'50''",
+                            util.secondsToHClock(110))
+            assert.is_equal("2'00''",
+                            util.secondsToHClock(120))
+        end)
+    end)
+
+    describe("urlEncode() and urlDecode", function()
+        it("should encode string", function()
+            assert.is_equal("Secret_Password123", util.urlEncode("Secret_Password123"))
+            assert.is_equal("Secret%20Password123", util.urlEncode("Secret Password123"))
+            assert.is_equal("S*cret%3DP%40%24%24word*!%23%3F", util.urlEncode("S*cret=P@$$word*!#?"))
+            assert.is_equal("~%5E-_%5C%25!*'()%3B%3A%40%26%3D%2B%24%2C%2F%3F%23%5B%5D",
+                util.urlEncode("~^-_\\%!*'();:@&=+$,/?#[]"))
+        end)
+        it("should decode string", function()
+            assert.is_equal("Secret_Password123", util.urlDecode("Secret_Password123"))
+            assert.is_equal("Secret Password123", util.urlDecode("Secret%20Password123"))
+            assert.is_equal("S*cret=P@$$word*!#?", util.urlDecode("S*cret%3DP%40%24%24word*!%23%3F"))
+            assert.is_equal("~^-_\\%!*'();:@&=+$,/?#[]",
+                util.urlDecode("~%5E-_%5C%25!*'()%3B%3A%40%26%3D%2B%24%2C%2F%3F%23%5B%5D"))
+        end)
+        it("should encode and back decode string", function()
+            assert.is_equal("Secret_Password123",
+                util.urlDecode(util.urlEncode("Secret_Password123")))
+            assert.is_equal("Secret Password123",
+                util.urlDecode(util.urlEncode("Secret Password123")))
+            assert.is_equal("S*cret=P@$$word*!#?",
+                util.urlDecode(util.urlEncode("S*cret=P@$$word*!#?")))
+            assert.is_equal("~^-_%!*'();:@&=+$,/?#[]",
+                util.urlDecode(util.urlEncode("~^-_%!*'();:@&=+$,/?#[]")))
         end)
     end)
 end)

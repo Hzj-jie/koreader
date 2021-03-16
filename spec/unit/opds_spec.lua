@@ -228,11 +228,18 @@ local facet_sample = [[
 
 describe("OPDS module #nocov", function()
     local OPDSParser, OPDSBrowser
+    local orig_path
 
     setup(function()
+        orig_path = package.path
+        package.path = "plugins/opds.koplugin/?.lua;" .. package.path
         require("commonrequire")
-        OPDSParser = require("ui/opdsparser")
-        OPDSBrowser = require("ui/widget/opdsbrowser")
+        OPDSParser = require("opdsparser")
+        OPDSBrowser = require("opdsbrowser")
+    end)
+
+    teardown(function()
+        package.path = orig_path
     end)
 
     describe("OPDS parser module", function()
@@ -266,39 +273,46 @@ describe("OPDS module #nocov", function()
 
     describe("OPDS browser module", function()
         describe("URL generation", function()
+            it("should generate search item", function()
+                local catalog = OPDSParser:parse(navigation_sample)
+                local item_table = OPDSBrowser:genItemTableFromCatalog(catalog, "http://m.gutenberg.org/ebooks.opds/?format=opds")
+
+                assert.truthy(item_table)
+                assert.are.same(item_table[1].text, "Search")
+            end)
             it("should generate URL on rel=subsection", function()
                 local catalog = OPDSParser:parse(navigation_sample)
                 local item_table = OPDSBrowser:genItemTableFromCatalog(catalog, "http://m.gutenberg.org/ebooks.opds/?format=opds")
 
                 assert.truthy(item_table)
-                assert.are.same(item_table[1].title, "Popular")
-                assert.are.same(item_table[1].url, "http://m.gutenberg.org/ebooks/search.opds/?sort_order=downloads")
+                assert.are.same(item_table[2].title, "Popular")
+                assert.are.same(item_table[2].url, "http://m.gutenberg.org/ebooks/search.opds/?sort_order=downloads")
             end)
             it("should generate URL on rel=popular and rel=new", function()
                 local catalog = OPDSParser:parse(popular_new_sample)
                 local item_table = OPDSBrowser:genItemTableFromCatalog(catalog, "http://www.feedbooks.com/publicdomain/catalog.atom")
 
                 assert.truthy(item_table)
-                assert.are.same(item_table[1].title, "Most Popular")
-                assert.are.same(item_table[1].url, "http://www.feedbooks.com/books/top.atom")
-                assert.are.same(item_table[2].title, "Recently Added")
-                assert.are.same(item_table[2].url, "http://www.feedbooks.com/books/recent.atom")
+                assert.are.same(item_table[2].title, "Most Popular")
+                assert.are.same(item_table[2].url, "http://www.feedbooks.com/books/top.atom")
+                assert.are.same(item_table[3].title, "Recently Added")
+                assert.are.same(item_table[3].url, "http://www.feedbooks.com/books/recent.atom")
             end)
             it("should use the main URL for faceted links as long as faceted links aren't properly supported", function()
                 local catalog = OPDSParser:parse(facet_sample)
-                local item_table = OPDSBrowser:genItemTableFromCatalog(catalog, "http://flibusta.net/opds")
+                local item_table = OPDSBrowser:genItemTableFromCatalog(catalog, "http://flibusta.is/opds")
 
                 assert.truthy(item_table)
-                assert.are.same(item_table[1].url, "http://flibusta.net/opds/author/75357")
+                assert.are.same(item_table[2].url, "http://flibusta.is/opds/author/75357")
             end)
         end)
 
         it("should not fill item table incorrectly with thumbnail or image URL", function()
             local catalog = OPDSParser:parse(facet_sample)
-            local item_table = OPDSBrowser:genItemTableFromCatalog(catalog, "http://flibusta.net/opds")
+            local item_table = OPDSBrowser:genItemTableFromCatalog(catalog, "http://flibusta.is/opds")
 
             assert.truthy(item_table)
-            assert.are_not.same(item_table[1].image, "http://flibusta.net/opds/author/75357")
+            assert.are_not.same(item_table[2].image, "http://flibusta.is/opds/author/75357")
         end)
     end)
 end)

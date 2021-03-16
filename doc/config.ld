@@ -7,18 +7,26 @@ style = '!fixed'
 use_markdown_titles = true
 topics = {
     '../README.md',
-    './Collaborating with Git.md',
+    './Collaborating_with_Git.md',
     './DataStore.md',
-    './Development guide.md',
+    './Development_guide.md',
     './Events.md',
     './Hacking.md',
     './Porting.md',
-    './Unit tests.md',
+    './Unit_tests.md',
 }
 package = ''
 format = 'markdown'
 sort_modules = true
 file = {
     '../frontend',
+    '../plugins',
     '../base/ffi',
+    '../platform/android/luajit-launcher/assets',
+    exclude = {'../base/ffi/sha2.lua',
+        '../base/ffi/qrencode.lua',
+        '../plugins/evernote.koplugin/slt2.lua',
+        '../plugins/newsdownloader.koplugin/lib/handler.lua',
+        '../plugins/newsdownloader.koplugin/lib/xml.lua',
+    },
 }

@@ -19,6 +19,8 @@ if lang_locale then
     _.changeLang(lang_locale)
 end
 local Device = require("device")
+local CanvasContext = require("document/canvascontext")
+CanvasContext:init(Device)
 local UIManager = require("ui/uimanager")
 local RenderText = require("ui/rendertext")
 local Font = require("ui/font")
@@ -131,7 +133,7 @@ Background = InputContainer:new{
     },
     -- contains a gray rectangular desktop
     FrameContainer:new{
-        background = Blitbuffer.COLOR_GREY,
+        background = Blitbuffer.COLOR_DARK_GRAY,
         bordersize = 0,
         dimen = Screen:getSize(),
         Widget:new{
@@ -269,7 +271,7 @@ touch_menu = TouchMenu:new{
     width = Screen:getWidth(),
     tab_item_table = {
         {
-            icon = "resources/icons/appbar.pokeball.png",
+            icon = "appbar.pokeball",
             {
                 text = "item1",
                 callback = function() end,
@@ -308,7 +310,7 @@ touch_menu = TouchMenu:new{
             },
         },
         {
-            icon = "resources/icons/appbar.page.corner.bookmark.png",
+            icon = "appbar.page.corner.bookmark",
             {
                 text = "item10",
                 callback = function() end,
@@ -319,7 +321,7 @@ touch_menu = TouchMenu:new{
             },
         },
         {
-            icon = "resources/icons/appbar.home.png",
+            icon = "home",
             callback = function() DEBUG("hello world!") end
         }
     },

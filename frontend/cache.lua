@@ -5,10 +5,11 @@ A global LRU cache
 local DataStorage = require("datastorage")
 local lfs = require("libs/libkoreader-lfs")
 local logger = require("logger")
-local md5 = require("ffi/MD5")
+local md5 = require("ffi/sha2").md5
 
-if require("device"):isAndroid() then
-    require("jit").off(true, true)
+local CanvasContext = require("document/canvascontext")
+if CanvasContext.should_restrict_JIT then
+    jit.off(true, true)
 end
 
 local function calcFreeMem()
@@ -128,7 +129,7 @@ function Cache:check(key, ItemClass)
         end
         return self.cache[key]
     elseif ItemClass then
-        local cached = self.cached[md5.sum(key)]
+        local cached = self.cached[md5(key)]
         if cached then
             local item = ItemClass:new{}
             local ok, msg = pcall(item.load, item, cached)
@@ -162,10 +163,16 @@ function Cache:serialize()
     local cache_size = 0
     for _, key in ipairs(self.cache_order) do
         local cache_item = self.cache[key]
+
         -- only dump cache item that requests serialization explicitly
         if cache_item.persistent and cache_item.dump then
+            local cache_full_path = cache_path..md5(key)
+            local cache_file_exists = lfs.attributes(cache_full_path)
+
+            if cache_file_exists then break end
+
             logger.dbg("dump cache item", key)
-            cache_size = cache_item:dump(cache_path..md5.sum(key)) or 0
+            cache_size = cache_item:dump(cache_full_path) or 0
             if cache_size > 0 then break end
         end
     end

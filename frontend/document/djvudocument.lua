@@ -1,7 +1,6 @@
 local Blitbuffer = require("ffi/blitbuffer")
 local Document = require("document/document")
 local DrawContext = require("ffi/drawcontext")
-local KoptOptions = require("ui/data/koptoptions")
 
 local DjvuDocument = Document:new{
     _document = false,
@@ -9,9 +8,10 @@ local DjvuDocument = Document:new{
     is_djvu = true,
     djvulibre_cache_size = nil,
     dc_null = DrawContext.new(),
-    options = KoptOptions,
     koptinterface = nil,
     color_bb_type = Blitbuffer.TYPE_BBRGB24,
+    provider = "djvulibre",
+    provider_name = "DjVu Libre",
 }
 
 -- check DjVu magic string to validate
@@ -28,7 +28,7 @@ function DjvuDocument:init()
     self:updateColorRendering()
     local djvu = require("libs/libkoreader-djvu")
     self.koptinterface = require("document/koptinterface")
-    self.configurable:loadDefaults(self.options)
+    self.koptinterface:setDefaultConfigurable(self.configurable)
     if not validDjvuFile(self.file) then
         error("Not a valid DjVu file")
     end
@@ -52,15 +52,28 @@ function DjvuDocument:updateColorRendering()
 end
 
 function DjvuDocument:getProps()
+    local props = self._document:getMetadata()
     local _, _, docname = self.file:find(".*/(.*)")
     docname = docname or self.file
-    return {
-        title = docname:match("(.*)%.")
-    }
+
+    -- According to djvused(1), the convention is that
+    -- BibTex keys are always lowercase and DocInfo capitalized
+    props.title = props.title or props.Title or docname:match("(.*)%.")
+    props.authors = props.author or props.Author
+    props.series = props.series or props.Series
+    props.language = props.language or props.Language
+    props.keywords = props.keywords or props.Keywords
+    props.description = props.description or props.Description
+
+    return props
 end
 
 function DjvuDocument:getPageTextBoxes(pageno)
     return self._document:getPageText(pageno)
+end
+
+function DjvuDocument:getPanelFromPage(pageno, pos)
+    return self.koptinterface:getPanelFromPage(self, pageno, pos)
 end
 
 function DjvuDocument:getWordFromPosition(spos)
@@ -136,8 +149,10 @@ function DjvuDocument:drawPage(target, x, y, rect, pageno, zoom, rotation, gamma
 end
 
 function DjvuDocument:register(registry)
-    registry:addProvider("djvu", "application/djvu", self)
-    registry:addProvider("djv", "application/djvu", self)
+    registry:addProvider("djvu", "image/vnd.djvu", self, 100)
+    registry:addProvider("djvu", "application/djvu", self, 100) -- Alternative mimetype for OPDS.
+    registry:addProvider("djvu", "image/x-djvu", self, 100) -- Alternative mimetype for OPDS.
+    registry:addProvider("djv", "image/vnd.djvu", self, 100)
 end
 
 return DjvuDocument
