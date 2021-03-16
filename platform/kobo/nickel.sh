@@ -1,101 +1,101 @@
 #!/bin/sh
-PATH="/sbin:/bin:/usr/sbin:/usr/bin:/usr/lib"
+PATH="/sbin:/bin:/usr/sbin:/usr/bin:/usr/lib:"
 
-# Handle the rotation weirdness on some devices
-cur_rotate="$(cat "/sys/class/graphics/fb0/rotate")"
+# We don't need to duplicate any of the env setup from rcS, since we will only ever run this to *restart* nickel, and not bootstrap it.
+# Meaning we've already got most of the necessary env from nickel itself via both our launcher (fmon/KFMon) and our own startup script.
+# NOTE: LD_LIBRARY_PATH is the only late export from rcS we don't siphon in koreader.sh, for obvious reasons ;).
+export LD_LIBRARY_PATH="/usr/local/Kobo"
 
-# start fmon again. Note that we don't have to worry about reaping this, nickel kills on-animator.sh on start.
+# Reset PWD, and clear up our own custom stuff from the env while we're there, otherwise, USBMS may become very wonky on newer FW...
+# shellcheck disable=SC2164
+cd /
+unset OLDPWD
+unset LC_ALL TESSDATA_PREFIX STARDICT_DATA_DIR EXT_FONT_DIR
+unset KOREADER_DIR KO_DONT_GRAB_INPUT
+
+# Ensures fmon will restart. Note that we don't have to worry about reaping this, nickel kills on-animator.sh on start.
 (
-    usleep 400000
+    if [ "${PLATFORM}" = "freescale" ] || [ "${PLATFORM}" = "mx50-ntx" ] || [ "${PLATFORM}" = "mx6sl-ntx" ]; then
+        usleep 400000
+    fi
     /etc/init.d/on-animator.sh
 ) &
 
-# environment needed by nickel, from /etc/init.d/rcS:
-
-if [ ! -n "${WIFI_MODULE_PATH}" ]; then
-    INTERFACE="wlan0"
-    WIFI_MODULE="ar6000"
-    if [ "${PLATFORM}" != "freescale" ]; then
-        INTERFACE="eth0"
-        WIFI_MODULE="dhd"
-    fi
-    export INTERFACE
-    export WIFI_MODULE
-    export WIFI_MODULE_PATH="/drivers/${PLATFORM}/wifi/${WIFI_MODULE}.ko"
-fi
-
-export NICKEL_HOME="/mnt/onboard/.kobo"
-export LD_LIBRARY_PATH="/usr/local/Kobo"
-
-export LANG="en_US.UTF-8"
-
-# Make sure we kill the WiFi first, because nickel apparently doesn't like it if it's up... (cf. #1520)
+# Make sure we kill the Wi-Fi first, because nickel apparently doesn't like it if it's up... (cf. #1520)
 # NOTE: That check is possibly wrong on PLATFORM == freescale (because I don't know if the sdio_wifi_pwr module exists there), but we don't terribly care about that.
-if lsmod | grep -q sdio_wifi_pwr; then
-    killall udhcpc default.script wpa_supplicant 2>/dev/null
-    wlarm_le -i ${INTERFACE} down
-    ifconfig ${INTERFACE} down
-    # NOTE: Kobo's busybox build is weird. rmmod appears to be modprobe in disguise, defaulting to the -r flag. If re-specifying -r starts to fail one day, switch to rmmod without args, or modprobe -r.
-    rmmod -r ${WIFI_MODULE}
-    rmmod -r sdio_wifi_pwr
+if grep -q "sdio_wifi_pwr" "/proc/modules"; then
+    killall -q -TERM restore-wifi-async.sh enable-wifi.sh obtain-ip.sh
+    cp -a "/etc/resolv.conf" "/tmp/resolv.ko"
+    old_hash="$(md5sum "/etc/resolv.conf" | cut -f1 -d' ')"
+    if [ -x "/sbin/dhcpcd" ]; then
+        env -u LD_LIBRARY_PATH dhcpcd -d -k "${INTERFACE}"
+        killall -q -TERM udhcpc default.script
+    else
+        killall -q -TERM udhcpc default.script dhcpcd
+    fi
+    # NOTE: dhcpcd -k waits for the signalled process to die, but busybox's killall doesn't have a -w, --wait flag,
+    #       so we have to wait for udhcpc to die ourselves...
+    # NOTE: But if all is well, there *isn't* any udhcpc process or script left to begin with...
+    kill_timeout=0
+    while pkill -0 udhcpc; do
+        # Stop waiting after 5s
+        if [ ${kill_timeout} -ge 20 ]; then
+            break
+        fi
+        usleep 250000
+        kill_timeout=$((kill_timeout + 1))
+    done
+
+    new_hash="$(md5sum "/etc/resolv.conf" | cut -f1 -d' ')"
+    # Restore our network-specific resolv.conf if the DHCP client wiped it when releasing the lease...
+    if [ "${new_hash}" != "${old_hash}" ]; then
+        mv -f "/tmp/resolv.ko" "/etc/resolv.conf"
+    else
+        rm -f "/tmp/resolv.ko"
+    fi
+    wpa_cli terminate
+    [ "${WIFI_MODULE}" != "8189fs" ] && [ "${WIFI_MODULE}" != "8192es" ] && wlarm_le -i "${INTERFACE}" down
+    ifconfig "${INTERFACE}" down
+    # NOTE: Kobo's busybox build is weird. rmmod appears to be modprobe in disguise, defaulting to the -r flag...
+    #       But since there's currently no modules.dep file being shipped, nor do they include the depmod applet,
+    #       go with what the FW is doing, which is rmmod.
+    # c.f., #2394?
+    usleep 250000
+    rmmod "${WIFI_MODULE}"
+
+    if [ -n "${CPUFREQ_DVFS}" ]; then
+        echo "0" >"/sys/devices/platform/mxc_dvfs_core.0/enable"
+        # Leave Nickel in its usual state, don't try to use conservative
+        echo "userspace" >"/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor"
+        cat "/sys/devices/system/cpu/cpu0/cpufreq/scaling_max_freq" >"/sys/devices/system/cpu/cpu0/cpufreq/scaling_setspeed"
+    fi
+    usleep 250000
+    rmmod sdio_wifi_pwr
 fi
+
+unset CPUFREQ_DVFS CPUFREQ_CONSERVATIVE
+
+# Recreate Nickel's FIFO ourselves, like rcS does, because udev *will* write to it!
+# Plus, we actually *do* want the stuff udev writes in there to be processed by Nickel, anyway.
+rm -f "/tmp/nickel-hardware-status"
+mkfifo "/tmp/nickel-hardware-status"
 
 # Flush buffers to disk, who knows.
 sync
 
-# start nickel again (inspired from KSM, vlasovsoft & the base rcS), this should
-# cover at least firmware versions from 2.6.1 to 3.12.1 (tested on a kobo
-# mini with 3.4.1 firmware & a H2O on 3.12.1)
-
-# NOTE: Since we're not cold booting, this is technically redundant... On the other hand, it doesn't really hurt either ;).
-(
-    /usr/local/Kobo/pickel disable.rtc.alarm
-
-    if [ ! -e "/etc/wpa_supplicant/wpa_supplicant.conf" ]; then
-        cp "/etc/wpa_supplicant/wpa_supplicant.conf.template" "/etc/wpa_supplicant/wpa_supplicant.conf"
-    fi
-
-    # FWIW, that appears to be gone from recent rcS scripts. AFAICT, still harmless, though.
-    echo 1 >"/sys/devices/platform/mxc_dvfs_core.0/enable"
-
-    /sbin/hwclock -s -u
-) &
-
-# Hey there, nickel!
-if [ ! -e "/usr/local/Kobo/platforms/libkobo.so" ]; then
-    export QWS_KEYBOARD="imx508kbd:/dev/input/event0"
-    export QT_PLUGIN_PATH="/usr/local/Kobo/plugins"
-    if [ -e "/usr/local/Kobo/plugins/gfxdrivers/libimxepd.so" ]; then
-        export QWS_DISPLAY="imxepd"
-    else
-        export QWS_DISPLAY="Transformed:imx508:Rot90"
-        export QWS_MOUSE_PROTO="tslib_nocal:/dev/input/event1"
-    fi
-    # NOTE: Send the output to the void, to avoid spamming the shell with the output of the string of killall commands they periodically send
-    /usr/local/Kobo/hindenburg >/dev/null 2>&1 &
-    /usr/local/Kobo/nickel -qws -skipFontLoad >/dev/null 2>&1 &
-else
-    /usr/local/Kobo/hindenburg >/dev/null 2>&1 &
-    lsmod | grep -q lowmem || insmod "/drivers/${PLATFORM}/misc/lowmem.ko" &
-    if grep -q "dhcpcd=true" "/mnt/onboard/.kobo/Kobo/Kobo eReader.conf"; then
-        dhcpcd -d -t 10 &
-    fi
-    /usr/local/Kobo/nickel -platform kobo -skipFontLoad >/dev/null 2>&1 &
-fi
-
-# Ahoy, annoying sickel!
-if [ -x /usr/local/Kobo/sickel ]; then
-    /usr/local/Kobo/sickel -platform kobo:noscreen >/dev/null 2>&1 &
-fi
-
-# Rotation weirdness, part II
-echo "${cur_rotate}" >"/sys/class/graphics/fb0/rotate"
-# shellcheck disable=SC2094
-cat "/sys/class/graphics/fb0/rotate" >"/sys/class/graphics/fb0/rotate"
-
-# Handle sdcard
+# Handle the sdcard:
+# We need to unmount it ourselves, or Nickel wigs out and shows an "unrecognized FS" popup until the next fake sd add event.
+# The following udev trigger should then ensure there's a single sd add event enqueued in the FIFO for it to process,
+# ensuring it gets sanely detected and remounted RO.
 if [ -e "/dev/mmcblk1p1" ]; then
-    echo sd add /dev/mmcblk1p1 >>/tmp/nickel-hardware-status &
+    umount /mnt/sd
 fi
+
+# And finally, simply restart nickel.
+# We don't care about horribly legacy stuff, because if people switch between nickel and KOReader in the first place, I assume they're using a decently recent enough FW version.
+# Last tested on an H2O & a Forma running FW 4.7.x - 4.25.x
+/usr/local/Kobo/hindenburg &
+LIBC_FATAL_STDERR_=1 /usr/local/Kobo/nickel -platform kobo -skipFontLoad &
+[ "${PLATFORM}" != "freescale" ] && udevadm trigger &
 
 return 0

@@ -1,21 +1,24 @@
+local Device = require("device")
+
 local order = {
     ["KOMenu:menu_buttons"] = {
+        "filemanager_settings",
         "setting",
         "tools",
         "search",
+        "plus_menu",
         "main",
     },
-    setting = {
+    filemanager_settings = {
         "filemanager_display_mode",
-        "show_hidden_files",
-        "items_per_page",
+        "filebrowser_settings",
         "----------------------------",
         "sort_by",
         "reverse_sorting",
         "----------------------------",
         "start_with",
-        "screensaver",
-        "----------------------------",
+    },
+    setting = {
         -- common settings
         -- those that don't exist will simply be skipped during menu gen
         "frontlight", -- if Device:hasFrontlight()
@@ -23,35 +26,100 @@ local order = {
         "----------------------------",
         "network",
         "screen",
-        "save_document",
+        "----------------------------",
+        "taps_and_gestures",
+        "navigation",
+        "document",
         "----------------------------",
         "language",
-        "time",
+        "device",
         -- end common settings
     },
+    device = {
+        "keyboard_layout",
+        "time",
+        "battery",
+        "charging_led", -- if Device:canToggleChargingLED()
+        "autostandby",
+        "autosuspend",
+        "autoshutdown",
+        "ignore_sleepcover",
+        "ignore_open_sleepcover",
+        "ignore_battery_optimizations",
+        "mass_storage_settings", -- if Device:canToggleMassStorage()
+        "file_ext_assoc",
+        "screenshot",
+    },
+    navigation = {
+        "back_to_exit",
+        "back_in_filemanager",
+        "back_in_reader",
+        "android_volume_keys",
+        "android_camera_key",
+        "android_haptic_feedback",
+        "android_back_button",
+        "----------------------------",
+        "invert_page_turn_buttons",
+    },
+    network = {
+        "network_wifi",
+        "network_proxy",
+        "network_powersave",
+        "network_restore",
+        "network_info",
+        "network_before_wifi_action",
+        "network_after_wifi_action",
+        "network_dismiss_scan",
+        "----------------------------",
+        "ssh",
+    },
+    screen = {
+        "screensaver",
+        "----------------------------",
+        "screen_rotation",
+        "----------------------------",
+        "screen_dpi",
+        "screen_eink_opt",
+        "color_rendering",
+        "----------------------------",
+        "screen_timeout",
+        "fullscreen",
+    },
+    taps_and_gestures = {
+        "gesture_manager",
+        "gesture_intervals",
+        "----------------------------",
+        "menu_activate",
+        "ignore_hold_corners",
+        "screen_disable_double_tab",
+    },
     tools = {
-        "calibre_wireless_connection",
+        "calibre",
         "evernote",
         "statistics",
-        "storage_stat",
+        "move_to_archive",
         "cloud_storage",
         "read_timer",
+        "wallabag",
         "news_downloader",
+        "send2ebook",
+        "text_editor",
+        "profiles",
+        "qrclipboard",
         "----------------------------",
-        "more_plugins",
-        "----------------------------",
-        "advanced_settings",
-        "developer_options",
+        "more_tools",
     },
-    more_plugins = {
+    more_tools = {
         "auto_frontlight",
-        "frontlight_gesture_controller",
         "battery_statistics",
         "synchronize_time",
         "keep_alive",
+        "doc_setting_tweak",
         "terminal",
-        "storage_stat",
-        "network_poller",
+        "----------------------------",
+        "plugin_management",
+        "advanced_settings",
+        "developer_options",
     },
     search = {
         "dictionary_lookup",
@@ -66,17 +134,17 @@ local order = {
         "find_file",
         "----------------------------",
         "goodreads",
-        "opds_catalog",
+        "opds",
     },
     main = {
         "history",
         "open_last_document",
         "----------------------------",
-        "system_statistics",
+        "collections",
         "----------------------------",
-        "ota_update", --[[ if Device:isKindle() or Device:isKobo() or
-                           Device:isPocketBook() or Device:isAndroid() ]]--
-        "version",
+        "mass_storage_actions", -- if Device:canToggleMassStorage()
+        "----------------------------",
+        "ota_update", -- if Device:hasOTAUpdates()
         "help",
         "----------------------------",
         "exit_menu",
@@ -86,17 +154,24 @@ local order = {
         "----------------------------",
         "report_bug",
         "----------------------------",
+        "system_statistics", -- if enabled (Plugin)
+        "version",
         "about",
     },
+    plus_menu = {},
     exit_menu = {
-        "restart_koreader",
+        "restart_koreader", -- if Device:canRestart()
         "----------------------------",
-        "sleep", -- if Device:isKindle() or Device:isKobo()
-        "poweroff", -- if Device:isKobo()
-        "reboot",   -- if Device:isKobo()
+        "sleep", -- if Device:canSuspend()
+        "poweroff", -- if Device:canPowerOff()
+        "reboot", -- if Device:canReboot()
         "----------------------------",
+        "start_bq", -- if Device:isCervantes()
         "exit",
     }
 }
 
+if not Device:hasExitOptions() then
+    order.exit_menu = nil
+end
 return order

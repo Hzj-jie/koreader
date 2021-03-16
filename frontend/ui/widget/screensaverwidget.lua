@@ -1,4 +1,5 @@
 local Device = require("device")
+local Event = require("ui/event")
 local Geom = require("ui/geometry")
 local GestureRange = require("ui/gesturerange")
 local FrameContainer = require("ui/widget/container/framecontainer")
@@ -49,10 +50,11 @@ function ScreenSaverWidget:update()
         height = self.height,
         self.widget,
     }
+    self.dithered = true
     self[1] = self.main_frame
-    UIManager:setDirty("all", function()
+    UIManager:setDirty(self, function()
         local update_region = self.main_frame.dimen
-        return "partial", update_region
+        return "full", update_region
     end)
 end
 
@@ -66,14 +68,14 @@ end
 function ScreenSaverWidget:onTap(_, ges)
     if ges.pos:intersectWith(self.main_frame.dimen) then
         self:onClose()
-        UIManager:setDirty("all", "full")
     end
     return true
 end
 
 function ScreenSaverWidget:onClose()
-    UIManager:close(self)
-    UIManager:setDirty("all", "full")
+    UIManager:close(self, "full")
+    -- Will come after the Resume event (how much later depends on screensaver_delay).
+    UIManager:broadcastEvent(Event:new("OutOfScreenSaver"))
     return true
 end
 
@@ -84,7 +86,7 @@ end
 
 function ScreenSaverWidget:onCloseWidget()
     UIManager:setDirty(nil, function()
-        return "partial", self.main_frame.dimen
+        return "full", self.main_frame.dimen
     end)
     return true
 end

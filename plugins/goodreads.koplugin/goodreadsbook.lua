@@ -11,18 +11,18 @@ local InputContainer = require("ui/widget/container/inputcontainer")
 local LeftContainer = require("ui/widget/container/leftcontainer")
 local LineWidget = require("ui/widget/linewidget")
 local OverlapGroup = require("ui/widget/overlapgroup")
-local Pic = require("ffi/pic")
+local RenderImage = require("ui/renderimage")
+local ScrollHtmlWidget = require("ui/widget/scrollhtmlwidget")
 local Size = require("ui/size")
+local TextBoxWidget = require("ui/widget/textboxwidget")
 local TextWidget = require("ui/widget/textwidget")
+local UIManager = require("ui/uimanager")
 local VerticalGroup = require("ui/widget/verticalgroup")
 local VerticalSpan = require("ui/widget/verticalspan")
-local Screen = require("device").screen
-local ScrollTextWidget = require("ui/widget/scrolltextwidget")
-local TextBoxWidget = require("ui/widget/textboxwidget")
-local UIManager = require("ui/uimanager")
-local https = require('ssl.https')
-local T = require("ffi/util").template
+local https = require("ssl.https")
 local _ = require("gettext")
+local Screen = require("device").screen
+local T = require("ffi/util").template
 
 local GoodreadsBook = InputContainer:new{
     padding = Size.padding.fullscreen,
@@ -65,14 +65,14 @@ function GoodreadsBook:genHeader(title)
     local header_title = TextWidget:new{
         text = title,
         face = self.medium_font_face,
-        fgcolor = Blitbuffer.gray(0.4),
+        fgcolor = Blitbuffer.COLOR_WEB_GRAY,
     }
     local padding_span = HorizontalSpan:new{ width = self.padding}
     local line_width = (self.screen_width - header_title:getSize().w) / 2 - self.padding * 2
     local line_container = LeftContainer:new{
         dimen = Geom:new{ w = line_width, h = self.screen_height / 25 },
         LineWidget:new{
-            background = Blitbuffer.gray(0.2),
+            background = Blitbuffer.COLOR_LIGHT_GRAY,
             dimen = Geom:new{
                 w = line_width,
                 h = Size.line.thick,
@@ -97,7 +97,7 @@ function GoodreadsBook:genHeader(title)
 end
 
 function GoodreadsBook:genBookInfoGroup()
-    local split_span_width = self.screen_width * 0.05
+    local split_span_width = math.floor(self.screen_width * 0.05)
     local img_width, img_height
     if Screen:getScreenMode() == "landscape" then
         img_width = Screen:scaleBySize(132)
@@ -133,7 +133,7 @@ function GoodreadsBook:genBookInfoGroup()
         }
     )
     --span
-    local span_author = VerticalSpan:new{ width = height * 0.1 }
+    local span_author = VerticalSpan:new{ width = math.floor(height * 0.1) }
     table.insert(book_meta_info_group,
         CenterContainer:new{
             dimen = Geom:new{ w = width, h = Screen:scaleBySize(10) },
@@ -194,18 +194,15 @@ function GoodreadsBook:genBookInfoGroup()
     }
     -- thumbnail
     local body = https.request(self.dates.image)
-    local image = false
-    if body then image = Pic.openJPGDocumentFromMem(body) end
-    if image then
+    local bb_image
+    if body then bb_image = RenderImage:renderImageData(body, #body, false, img_width, img_height) end
+    if bb_image then
         table.insert(book_info_group, ImageWidget:new{
-            image = image.image_bb:copy(),
-            width = img_width,
-            height = img_height,
+            image = bb_image,
         })
-        image:close()
     else
         table.insert(book_info_group, ImageWidget:new{
-            file = "resources/goodreadsnophoto.png",
+            file = "plugins/goodreads.koplugin/goodreadsnophoto.png",
             width = img_width,
             height = img_height,
         })
@@ -221,28 +218,39 @@ function GoodreadsBook:genBookInfoGroup()
         book_meta_info_group,
     })
     return CenterContainer:new{
-        dimen = Geom:new{ w = self.screen_width, h = self.screen_height * 0.35 },
+        dimen = Geom:new{ w = self.screen_width, h = math.floor(self.screen_height * 0.35) },
         book_info_group,
     }
 end
 
 function GoodreadsBook:bookReview()
+    local css = [[
+        @page {
+            margin: 0;
+            font-family: 'Noto Sans';
+        }
+
+        body {
+            margin: 0;
+            line-height: 1.3;
+            text-align: justify;
+        }
+        ]]
+
     local book_meta_info_group = VerticalGroup:new{
         align = "center",
         padding = 0,
         bordersize = 0,
-        ScrollTextWidget:new{
-            text = self.dates.description,
-            face = self.medium_font_face,
-            padding = 0,
-            width = self.screen_width * 0.9,
-            height = self.screen_height * 0.48,
+        ScrollHtmlWidget:new{
+            html_body = self.dates.description,
+            css = css,
+            width = math.floor(self.screen_width * 0.9),
+            height = math.floor(self.screen_height * 0.48),
             dialog = self,
-            justified = true,
         }
     }
     return CenterContainer:new{
-        dimen = Geom:new{ w = self.screen_width, h = self.screen_height * 0.50 },
+        dimen = Geom:new{ w = self.screen_width, h = math.floor(self.screen_height * 0.5) },
         book_meta_info_group,
     }
 end
@@ -252,8 +260,7 @@ function GoodreadsBook:onAnyKeyPressed()
 end
 
 function GoodreadsBook:onClose()
-    UIManager:setDirty("all")
-    UIManager:close(self)
+    UIManager:close(self, "flashui")
     return true
 end
 

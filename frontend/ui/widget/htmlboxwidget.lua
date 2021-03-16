@@ -8,7 +8,7 @@ local Geom = require("ui/geometry")
 local GestureRange = require("ui/gesturerange")
 local InputContainer = require("ui/widget/container/inputcontainer")
 local Mupdf = require("ffi/mupdf")
-local Screen = require("device").screen
+local Screen = Device.screen
 local TimeVal = require("ui/timeval")
 local logger = require("logger")
 local util  = require("util")
@@ -97,6 +97,15 @@ function HtmlBoxWidget:getSize()
     return self.dimen
 end
 
+function HtmlBoxWidget:getSinglePageHeight()
+    if self.page_count == 1 then
+        local page = self.document:openPage(1)
+        local x0, y0, x1, y1 = page:getUsedBBox() -- luacheck: no unused
+        page:close()
+        return math.ceil(y1) -- no content after y1
+    end
+end
+
 function HtmlBoxWidget:paintTo(bb, x, y)
     self.dimen.x = x
     self.dimen.y = y
@@ -121,6 +130,7 @@ end
 -- (ie: in some other widget's update()), to not leak memory with
 -- BlitBuffer zombies
 function HtmlBoxWidget:free()
+    --print("HtmlBoxWidget:free on", self)
     self:freeBb()
 
     if self.document then
@@ -150,8 +160,22 @@ end
 
 function HtmlBoxWidget:onHoldStartText(_, ges)
     self.hold_start_pos = self:getPosFromAbsPos(ges.pos)
+
+    if not self.hold_start_pos then
+        return false -- let event be processed by other widgets
+    end
+
     self.hold_start_tv = TimeVal.now()
 
+    return true
+end
+
+function HtmlBoxWidget:onHoldPan(_, ges)
+    -- We don't highlight the currently selected text, but just let this
+    -- event pop up if we are not currently selecting text
+    if not self.hold_start_pos then
+        return false
+    end
     return true
 end
 
@@ -162,9 +186,14 @@ function HtmlBoxWidget:getSelectedText(lines, start_pos, end_pos)
     for _, line in pairs(lines) do
         for _, w in pairs(line) do
             if type(w) == 'table' then
-                if (not found_start) and
-                    (start_pos.x >= w.x0 and start_pos.x < w.x1 and start_pos.y >= w.y0 and start_pos.y < w.y1) then
-                    found_start = true
+                if not found_start then
+                    if start_pos.x >= w.x0 and start_pos.x < w.x1 and start_pos.y >= w.y0 and start_pos.y < w.y1 then
+                        found_start = true
+                    elseif end_pos.x >= w.x0 and end_pos.x < w.x1 and end_pos.y >= w.y0 and end_pos.y < w.y1 then
+                        -- We found end_pos before start_pos, switch them
+                        found_start = true
+                        start_pos, end_pos = end_pos, start_pos
+                    end
                 end
 
                 if found_start then

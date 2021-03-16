@@ -18,8 +18,8 @@ Example:
         show_icon = false,
         timeout = 5,  -- This widget will vanish in 5 seconds.
     }
-    sample_input:onShowKeyboard()
     UIManager:show(sample_input)
+    sample_input:onShowKeyboard()
 ]]
 
 local Blitbuffer = require("ffi/blitbuffer")
@@ -31,8 +31,10 @@ local Geom = require("ui/geometry")
 local GestureRange = require("ui/gesturerange")
 local HorizontalGroup = require("ui/widget/horizontalgroup")
 local HorizontalSpan = require("ui/widget/horizontalspan")
+local IconWidget = require("ui/widget/iconwidget")
 local ImageWidget = require("ui/widget/imagewidget")
 local InputContainer = require("ui/widget/container/inputcontainer")
+local MovableContainer = require("ui/widget/container/movablecontainer")
 local ScrollTextWidget = require("ui/widget/scrolltextwidget")
 local Size = require("ui/size")
 local TextBoxWidget = require("ui/widget/textboxwidget")
@@ -56,7 +58,19 @@ local InfoMessage = InputContainer:new{
     image_height = nil,  -- The image height if image is used. Keep it nil to use original height.
     -- Whether the icon should be shown. If it is false, self.image will be ignored.
     show_icon = true,
-    dismiss_callback = function() end,
+    icon = "notice-info",
+    alpha = nil, -- if image or icon have an alpha channel (default to true for icons, false for images
+    dismiss_callback = nil,
+    -- In case we'd like to use it to display some text we know a few more things about:
+    lang = nil,
+    para_direction_rtl = nil,
+    auto_para_direction = nil,
+    -- Don't call setDirty when closing the widget
+    no_refresh_on_close = nil,
+    -- Only have it painted after this delay (dismissing still works before it's shown)
+    show_delay = nil,
+    -- Set to true when it might be displayed after some processing, to avoid accidental dismissal
+    flush_events_on_show = false,
 }
 
 function InfoMessage:init()
@@ -81,7 +95,7 @@ function InfoMessage:init()
 
     local image_widget
     if self.show_icon then
-        -- TODO: remove self.image support, only used in filemanagersearch
+        --- @todo remove self.image support, only used in filemanagersearch
         -- this requires self.image's lifecycle to be managed by ImageWidget
         -- instead of caller, which is easy to introduce bugs
         if self.image then
@@ -89,11 +103,12 @@ function InfoMessage:init()
                 image = self.image,
                 width = self.image_width,
                 height = self.image_height,
+                alpha = self.alpha ~= nil and self.alpha or false, -- default to false
             }
         else
-            image_widget = ImageWidget:new{
-                file = "resources/info-i.png",
-                scale_for_dpi = true,
+            image_widget = IconWidget:new{
+                icon = self.icon,
+                alpha = self.alpha == nil and true or self.alpha, -- default to true
             }
         end
     else
@@ -102,7 +117,7 @@ function InfoMessage:init()
 
     local text_width
     if self.width == nil then
-        text_width = Screen:getWidth() * 2 / 3
+        text_width = math.floor(Screen:getWidth() * 2/3)
     else
         text_width = self.width - image_widget:getSize().w
         if text_width < 0 then
@@ -118,30 +133,81 @@ function InfoMessage:init()
             width = text_width,
             height = self.height,
             dialog = self,
+            lang = self.lang,
+            para_direction_rtl = self.para_direction_rtl,
+            auto_para_direction = self.auto_para_direction,
         }
     else
         text_widget = TextBoxWidget:new{
             text = self.text,
             face = self.face,
             width = text_width,
+            lang = self.lang,
+            para_direction_rtl = self.para_direction_rtl,
+            auto_para_direction = self.auto_para_direction,
         }
     end
-    -- we construct the actual content here because self.text is only available now
-    self[1] = CenterContainer:new{
-        dimen = Screen:getSize(),
-        FrameContainer:new{
-            background = Blitbuffer.COLOR_WHITE,
-            HorizontalGroup:new{
-                align = "center",
-                image_widget,
-                HorizontalSpan:new{ width = (self.show_icon and Size.span.horizontal_default or 0) },
-                text_widget,
-            }
+    local frame = FrameContainer:new{
+        background = Blitbuffer.COLOR_WHITE,
+        radius = Size.radius.window,
+        HorizontalGroup:new{
+            align = "center",
+            image_widget,
+            HorizontalSpan:new{ width = (self.show_icon and Size.span.horizontal_default or 0) },
+            text_widget,
         }
     }
+    self.movable = MovableContainer:new{
+        frame,
+    }
+    self[1] = CenterContainer:new{
+        dimen = Screen:getSize(),
+        self.movable,
+    }
+    if not self.height then
+        -- Reduce font size until widget fit screen height if needed
+        local cur_size = frame:getSize()
+        if cur_size and cur_size.h > 0.95 * Screen:getHeight() then
+            local orig_font = text_widget.face.orig_font
+            local orig_size = text_widget.face.orig_size
+            local real_size = text_widget.face.size
+            if orig_size > 10 then -- don't go too small
+                while true do
+                    orig_size = orig_size - 1
+                    self.face = Font:getFace(orig_font, orig_size)
+                    -- scaleBySize() in Font:getFace() may give the same
+                    -- real font size even if we decreased orig_size,
+                    -- so check we really got a smaller real font size
+                    if self.face.size < real_size then
+                        break
+                    end
+                end
+                -- re-init this widget
+                self:free()
+                self:init()
+            end
+        end
+    end
+
+    if self.show_delay then
+        -- Don't have UIManager setDirty us yet
+        self.invisible = true
+    end
 end
 
 function InfoMessage:onCloseWidget()
+    if self._delayed_show_action then
+        UIManager:unschedule(self._delayed_show_action)
+        self._delayed_show_action = nil
+    end
+    if self.invisible then
+        -- Still invisible, no setDirty needed
+        return true
+    end
+    if self.no_refresh_on_close then
+        return true
+    end
+
     UIManager:setDirty(nil, function()
         return "ui", self[1][1].dimen
     end)
@@ -149,28 +215,74 @@ function InfoMessage:onCloseWidget()
 end
 
 function InfoMessage:onShow()
-    -- triggered by the UIManager after we got successfully shown (not yet painted)
+    -- triggered by the UIManager after we got successfully show()'n (not yet painted)
+    if self.show_delay and self.invisible then
+        -- Let us be shown after this delay
+        self._delayed_show_action = function()
+            self._delayed_show_action = nil
+            self.invisible = false
+            self:onShow()
+        end
+        UIManager:scheduleIn(self.show_delay, self._delayed_show_action)
+        return true
+    end
+    -- set our region to be dirty, so UImanager will call our paintTo()
     UIManager:setDirty(self, function()
         return "ui", self[1][1].dimen
     end)
+    if self.flush_events_on_show then
+        -- Discard queued and coming up events to avoid accidental dismissal
+        UIManager:discardEvents(true)
+    end
+    -- schedule us to close ourself if timeout provided
     if self.timeout then
-        UIManager:scheduleIn(self.timeout, function() UIManager:close(self) end)
+        UIManager:scheduleIn(self.timeout, function()
+            -- In case we're provided with dismiss_callback, also call it
+            -- on timeout
+            if self.dismiss_callback then
+                self.dismiss_callback()
+                self.dismiss_callback = nil
+            end
+            UIManager:close(self)
+        end)
     end
     return true
 end
 
-function InfoMessage:onAnyKeyPressed()
-    -- triggered by our defined key events
-    self.dismiss_callback()
+function InfoMessage:getVisibleArea()
+    if not self.invisible then
+        return self[1][1].dimen
+    end
+end
+
+function InfoMessage:paintTo(bb, x, y)
+    if self.invisible then
+        return
+    end
+    InputContainer.paintTo(self, bb, x, y)
+end
+
+function InfoMessage:dismiss()
+    if self._delayed_show_action then
+        UIManager:unschedule(self._delayed_show_action)
+        self._delayed_show_action = nil
+    end
+    if self.dismiss_callback then
+        self.dismiss_callback()
+        self.dismiss_callback = nil
+    end
     UIManager:close(self)
+end
+
+function InfoMessage:onAnyKeyPressed()
+    self:dismiss()
     if self.readonly ~= true then
         return true
     end
 end
 
 function InfoMessage:onTapClose()
-    self.dismiss_callback()
-    UIManager:close(self)
+    self:dismiss()
     if self.readonly ~= true then
         return true
     end

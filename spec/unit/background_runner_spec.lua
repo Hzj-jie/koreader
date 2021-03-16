@@ -4,6 +4,7 @@ describe("BackgroundRunner widget tests", function()
     setup(function()
         require("commonrequire")
         package.unloadAll()
+        require("document/canvascontext"):init(require("device"))
         -- Device needs to be loaded before UIManager.
         Device = require("device")
         Device.input.waitEvent = function() end
@@ -18,7 +19,12 @@ describe("BackgroundRunner widget tests", function()
     teardown(function()
         MockTime:uninstall()
         package.unloadAll()
+        require("document/canvascontext"):init(require("device"))
         stopBackgroundRunner()
+    end)
+
+    before_each(function()
+        require("util").clearTable(PluginShare.backgroundJobs)
     end)
 
     it("should start job", function()
@@ -29,6 +35,8 @@ describe("BackgroundRunner widget tests", function()
                 executed = true
             end,
         })
+        notifyBackgroundJobsUpdated()
+
         MockTime:increase(2)
         UIManager:handleInput()
         MockTime:increase(9)
@@ -48,6 +56,7 @@ describe("BackgroundRunner widget tests", function()
                 executed = executed + 1
             end,
         })
+        notifyBackgroundJobsUpdated()
 
         MockTime:increase(2)
         UIManager:handleInput()
@@ -71,6 +80,7 @@ describe("BackgroundRunner widget tests", function()
                 executed = executed + 1
             end,
         })
+        notifyBackgroundJobsUpdated()
 
         MockTime:increase(2)
         UIManager:handleInput()
@@ -96,6 +106,7 @@ describe("BackgroundRunner widget tests", function()
             end,
         }
         table.insert(PluginShare.backgroundJobs, job)
+        notifyBackgroundJobsUpdated()
 
         MockTime:increase(2)
         UIManager:handleInput()
@@ -121,6 +132,7 @@ describe("BackgroundRunner widget tests", function()
             end,
         }
         table.insert(PluginShare.backgroundJobs, job)
+        notifyBackgroundJobsUpdated()
 
         while job.end_sec == nil do
             MockTime:increase(2)
@@ -146,6 +158,7 @@ describe("BackgroundRunner widget tests", function()
             }
         }
         table.insert(PluginShare.backgroundJobs, job)
+        notifyBackgroundJobsUpdated()
 
         while job.end_sec == nil do
             MockTime:increase(2)
@@ -163,6 +176,7 @@ describe("BackgroundRunner widget tests", function()
         }
         job.end_sec = nil
         table.insert(PluginShare.backgroundJobs, job)
+        notifyBackgroundJobsUpdated()
 
         while job.end_sec == nil do
             MockTime:increase(2)
@@ -193,6 +207,7 @@ describe("BackgroundRunner widget tests", function()
             end,
         }
         table.insert(PluginShare.backgroundJobs, job)
+        notifyBackgroundJobsUpdated()
 
         while job.end_sec == nil do
             MockTime:increase(2)
@@ -207,6 +222,7 @@ describe("BackgroundRunner widget tests", function()
         job.end_sec = nil
         env2 = "no"
         table.insert(PluginShare.backgroundJobs, job)
+        notifyBackgroundJobsUpdated()
 
         while job.end_sec == nil do
             MockTime:increase(2)
@@ -229,6 +245,7 @@ describe("BackgroundRunner widget tests", function()
             }
         }
         table.insert(PluginShare.backgroundJobs, job)
+        notifyBackgroundJobsUpdated()
 
         while job.end_sec == nil do
             MockTime:increase(2)
@@ -250,6 +267,7 @@ describe("BackgroundRunner widget tests", function()
                 executed = executed + 1
             end,
         })
+        notifyBackgroundJobsUpdated()
 
         MockTime:increase(2)
         UIManager:handleInput()
@@ -278,6 +296,7 @@ describe("BackgroundRunner widget tests", function()
                 executed = executed + 1
             end,
         })
+        notifyBackgroundJobsUpdated()
 
         MockTime:increase(2)
         UIManager:handleInput()
@@ -290,5 +309,68 @@ describe("BackgroundRunner widget tests", function()
         MockTime:increase(2)
         UIManager:handleInput()
         assert.are.equal(2, executed)
+    end)
+
+    it("should stop executing when suspending", function()
+        local executed = 0
+        local job = {
+            when = 1,
+            repeated = true,
+            executable = function()
+                executed = executed + 1
+            end,
+        }
+        table.insert(PluginShare.backgroundJobs, job)
+        notifyBackgroundJobsUpdated()
+
+        MockTime:increase(2)
+        UIManager:handleInput()
+        MockTime:increase(2)
+        UIManager:handleInput()
+        assert.are.equal(1, executed)
+        -- Simulate a suspend event.
+        requireBackgroundRunner():onSuspend()
+        for i = 1, 10 do
+            MockTime:increase(2)
+            UIManager:handleInput()
+            assert.are.equal(2, executed)
+        end
+        -- Simulate a resume event.
+        requireBackgroundRunner():onResume()
+        MockTime:increase(2)
+        UIManager:handleInput()
+        assert.are.equal(3, executed)
+        MockTime:increase(2)
+        UIManager:handleInput()
+        assert.are.equal(4, executed)
+    end)
+
+    it("should not start multiple times after multiple onResume", function()
+        local executed = 0
+        local job = {
+            when = 1,
+            repeated = true,
+            executable = function()
+                executed = executed + 1
+            end,
+        }
+        table.insert(PluginShare.backgroundJobs, job)
+        notifyBackgroundJobsUpdated()
+
+        for i = 1, 10 do
+            requireBackgroundRunner():onResume()
+        end
+
+        MockTime:increase(2)
+        UIManager:handleInput()
+        MockTime:increase(2)
+        UIManager:handleInput()
+        assert.are.equal(1, executed)
+        MockTime:increase(2)
+        UIManager:handleInput()
+        assert.are.equal(2, executed)
+        MockTime:increase(2)
+        UIManager:handleInput()
+        assert.are.equal(3, executed)
     end)
 end)

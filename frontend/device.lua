@@ -26,13 +26,28 @@ local function probeDevice()
         return require("device/pocketbook/device")
     end
 
+    local remarkable_test_stat = lfs.attributes("/usr/bin/xochitl")
+    if remarkable_test_stat then
+        return require("device/remarkable/device")
+    end
+
+    local sony_prstux_test_stat = lfs.attributes("/etc/PRSTUX")
+    if sony_prstux_test_stat then
+        return require("device/sony-prstux/device")
+    end
+
+    local cervantes_test_stat = lfs.attributes("/usr/bin/ntxinfo")
+    if cervantes_test_stat then
+        return require("device/cervantes/device")
+    end
+
     -- add new ports here:
     --
     -- if --[[ implement a proper test instead --]] false then
     --     return require("device/newport/device")
     -- end
 
-    error("did not find a hardware abstraction for this platform")
+    error("Could not find hardware abstraction for this platform. If you are trying to run the emulator, please ensure SDL is installed.")
 end
 
 local dev = probeDevice()

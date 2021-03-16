@@ -4,18 +4,27 @@ describe("BackgroundTaskPlugin", function()
     local MockTime = require("mock_time")
     local UIManager = require("ui/uimanager")
 
+    local BackgroundTaskPlugin_schedule_orig = BackgroundTaskPlugin._schedule
     setup(function()
         MockTime:install()
         local Device = require("device")
         Device.input.waitEvent = function() end
         UIManager._run_forever = true
         requireBackgroundRunner()
+        -- Monkey patch this method to notify BackgroundRunner
+        -- as it is not accessible to UIManager in these tests
+        BackgroundTaskPlugin._schedule = function(...)
+            BackgroundTaskPlugin_schedule_orig(...)
+            notifyBackgroundJobsUpdated()
+        end
     end)
 
     teardown(function()
         MockTime:uninstall()
         package.unloadAll()
+        require("document/canvascontext"):init(require("device"))
         stopBackgroundRunner()
+        BackgroundTaskPlugin._schedule = BackgroundTaskPlugin_schedule_orig
     end)
 
     local createTestPlugin = function(executable)

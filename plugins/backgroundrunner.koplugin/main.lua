@@ -1,8 +1,18 @@
+local Device = require("device")
+
+-- disable on android, since it breaks expect behaviour of an activity.
+-- it is also unused by other plugins.
+-- See https://github.com/koreader/koreader/issues/6297
+if Device:isAndroid() then
+    return { disabled = true, }
+end
+
 local CommandRunner = require("commandrunner")
 local PluginShare = require("pluginshare")
 local UIManager = require("ui/uimanager")
 local WidgetContainer = require("ui/widget/container/widgetcontainer")
 local logger = require("logger")
+local _ = require("gettext")
 
 -- BackgroundRunner is an experimental feature to execute non-critical jobs in
 -- background. A job is defined as a table in PluginShare.backgroundJobs table.
@@ -66,6 +76,7 @@ local logger = require("logger")
 
 local BackgroundRunner = {
     jobs = PluginShare.backgroundJobs,
+    running = false,
 }
 
 --- Copies required fields from |job|.
@@ -181,7 +192,7 @@ function BackgroundRunner:_execute()
                     should_ignore = true
                 end
             elseif type(job.when) == "string" then
-                -- TODO(Hzj_jie): Implement "idle" mode
+                --- @todo (Hzj_jie): Implement "idle" mode
                 if job.when == "best-effort" then
                     should_execute = (round > 0)
                 elseif job.when == "idle" then
@@ -194,6 +205,7 @@ function BackgroundRunner:_execute()
             end
 
             if should_execute then
+                logger.dbg("BackgroundRunner: run job ", job, " @ ", os.time())
                 assert(not should_ignore)
                 self:_executeJob(job)
                 break
@@ -206,14 +218,32 @@ function BackgroundRunner:_execute()
         end
     end
 
+    self.running = false
     if PluginShare.stopBackgroundRunner == nil then
-        self:_schedule()
+        if #self.jobs == 0 and not CommandRunner:pending() then
+            logger.dbg("BackgroundRunnerWidget: no job, stop running @ ", os.time())
+        else
+            self:_schedule()
+        end
+    else
+        logger.dbg("BackgroundRunnerWidget: stop running @ ", os.time())
     end
 end
 
 function BackgroundRunner:_schedule()
     assert(self ~= nil)
-    UIManager:scheduleIn(2, function() self:_execute() end)
+    if self.running == false then
+        if #self.jobs == 0 and not CommandRunner:pending() then
+            logger.dbg("BackgroundRunnerWidget: no job, not running @ ", os.time())
+        else
+            logger.dbg("BackgroundRunnerWidget: start running @ ", os.time())
+            self.running = true
+            UIManager:scheduleIn(2, function() self:_execute() end)
+        end
+    else
+        logger.dbg("BackgroundRunnerWidget: a schedule is pending @ ",
+                   os.time())
+    end
 end
 
 function BackgroundRunner:_insert(job)
@@ -228,5 +258,22 @@ local BackgroundRunnerWidget = WidgetContainer:new{
     name = "backgroundrunner",
     runner = BackgroundRunner,
 }
+
+function BackgroundRunnerWidget:onSuspend()
+    logger.dbg("BackgroundRunnerWidget:onSuspend() @ ", os.time())
+    PluginShare.stopBackgroundRunner = true
+end
+
+function BackgroundRunnerWidget:onResume()
+    logger.dbg("BackgroundRunnerWidget:onResume() @ ", os.time())
+    PluginShare.stopBackgroundRunner = nil
+    BackgroundRunner:_schedule()
+end
+
+function BackgroundRunnerWidget:onBackgroundJobsUpdated()
+    logger.dbg("BackgroundRunnerWidget:onBackgroundJobsUpdated() @ ", os.time())
+    PluginShare.stopBackgroundRunner = nil
+    BackgroundRunner:_schedule()
+end
 
 return BackgroundRunnerWidget

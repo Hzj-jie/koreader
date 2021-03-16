@@ -49,6 +49,10 @@ function BBoxWidget:init()
             }
         }
     end
+    if Device:hasKeys() then
+        self.key_events.Close = { {"Back"}, doc = "close windows" }
+        self.key_events.Select = { {"Press"}, doc = "confirm adjust" }
+    end
 end
 
 function BBoxWidget:getSize()
@@ -208,7 +212,7 @@ function BBoxWidget:onSwipeAdjust(arg, ges)
 end
 
 function BBoxWidget:onHoldAdjust(arg, ges)
-    -- FIXME: this is a dirty hack to disable hold gesture in page cropping
+    --- @fixme this is a dirty hack to disable hold gesture in page cropping
     -- since Kobo devices may append hold gestures to each swipe gesture rendering
     -- relative replacement impossible. See koreader/koreader#987 at Github.
     --self:adjustScreenBBox(ges)
@@ -221,5 +225,14 @@ function BBoxWidget:onConfirmAdjust(arg, ges)
     end
     return true
 end
+
+function BBoxWidget:onClose()
+    self.ui:handleEvent(Event:new("CancelPageCrop"))
+end
+
+function BBoxWidget:onSelect()
+    self.ui:handleEvent(Event:new("ConfirmPageCrop"))
+end
+
 
 return BBoxWidget

@@ -1,5 +1,5 @@
 describe("Readerrolling module", function()
-    local DocumentRegistry, ReaderUI, Event
+    local DocumentRegistry, ReaderUI, Event, Screen
     local readerui, rolling
 
     setup(function()
@@ -7,9 +7,11 @@ describe("Readerrolling module", function()
         DocumentRegistry = require("document/documentregistry")
         ReaderUI = require("apps/reader/readerui")
         Event = require("ui/event")
+        Screen = require("device").screen
 
         local sample_epub = "spec/front/unit/data/juliet.epub"
         readerui = ReaderUI:new{
+            dimen = Screen:getSize(),
             document = DocumentRegistry:openDocument(sample_epub),
         }
         rolling = readerui.rolling
@@ -17,7 +19,7 @@ describe("Readerrolling module", function()
 
     describe("test in portrait screen mode", function()
         it("should goto portrait screen mode", function()
-            readerui:handleEvent(Event:new("ChangeScreenMode", "portrait"))
+            readerui:handleEvent(Event:new("SetRotationMode", Screen.ORIENTATION_PORTRAIT))
         end)
 
         it("should goto certain page", function()
@@ -41,7 +43,7 @@ describe("Readerrolling module", function()
             local toc = readerui.toc
             for i = 30, 50, 5 do
                 rolling:onGotoPage(i)
-                rolling:onDoubleTapForward()
+                rolling:onGotoNextChapter()
                 assert.are.same(toc:getNextChapter(i, 0), rolling.current_page)
             end
         end)
@@ -50,7 +52,7 @@ describe("Readerrolling module", function()
             local toc = readerui.toc
             for i = 60, 80, 5 do
                 rolling:onGotoPage(i)
-                rolling:onDoubleTapBackward()
+                rolling:onGotoPrevChapter()
                 assert.are.same(toc:getPreviousChapter(i, 0), rolling.current_page)
             end
         end)
@@ -79,6 +81,7 @@ describe("Readerrolling module", function()
         it("should emit EndOfBook event at the end sample txt", function()
             local sample_txt = "spec/front/unit/data/sample.txt"
             local txt_readerui = ReaderUI:new{
+                dimen = Screen:getSize(),
                 document = DocumentRegistry:openDocument(sample_txt),
             }
             local called = false
@@ -103,12 +106,14 @@ describe("Readerrolling module", function()
             txt_rolling:onGotoViewRel(1)
             assert.is.truthy(called)
             readerui.onEndOfBook = nil
+            txt_readerui:closeDocument()
+            txt_readerui:onClose()
         end)
     end)
 
     describe("test in landscape screen mode", function()
         it("should go to landscape screen mode", function()
-            readerui:handleEvent(Event:new("ChangeScreenMode", "landscape"))
+            readerui:handleEvent(Event:new("SetRotationMode", Screen.ORIENTATION_LANDSCAPE))
         end)
         it("should goto certain page", function()
             for i = 1, 10, 5 do
@@ -129,7 +134,7 @@ describe("Readerrolling module", function()
             local toc = readerui.toc
             for i = 30, 50, 5 do
                 rolling:onGotoPage(i)
-                rolling:onDoubleTapForward()
+                rolling:onGotoNextChapter()
                 assert.are.same(toc:getNextChapter(i, 0), rolling.current_page)
             end
         end)
@@ -137,7 +142,7 @@ describe("Readerrolling module", function()
             local toc = readerui.toc
             for i = 60, 80, 5 do
                 rolling:onGotoPage(i)
-                rolling:onDoubleTapBackward()
+                rolling:onGotoPrevChapter()
                 assert.are.same(toc:getPreviousChapter(i, 0), rolling.current_page)
             end
         end)
@@ -156,29 +161,40 @@ describe("Readerrolling module", function()
 
     describe("switching screen mode should not change current page number", function()
         teardown(function()
-            readerui:handleEvent(Event:new("ChangeScreenMode", "portrait"))
+            readerui:handleEvent(Event:new("SetRotationMode", Screen.ORIENTATION_PORTRAIT))
         end)
         it("for portrait-landscape-portrait switching", function()
             for i = 80, 100, 10 do
-                readerui:handleEvent(Event:new("ChangeScreenMode", "portrait"))
+                readerui:handleEvent(Event:new("SetRotationMode", Screen.ORIENTATION_PORTRAIT))
                 rolling:onGotoPage(i)
                 assert.are.same(i, rolling.current_page)
-                readerui:handleEvent(Event:new("ChangeScreenMode", "landscape"))
+                readerui:handleEvent(Event:new("SetRotationMode", Screen.ORIENTATION_LANDSCAPE))
                 assert.are_not.same(i, rolling.current_page)
-                readerui:handleEvent(Event:new("ChangeScreenMode", "portrait"))
+                readerui:handleEvent(Event:new("SetRotationMode", Screen.ORIENTATION_PORTRAIT))
                 assert.are.same(i, rolling.current_page)
             end
         end)
         it("for landscape-portrait-landscape switching", function()
             for i = 110, 130, 10 do
-                readerui:handleEvent(Event:new("ChangeScreenMode", "landscape"))
+                readerui:handleEvent(Event:new("SetRotationMode", Screen.ORIENTATION_LANDSCAPE))
                 rolling:onGotoPage(i)
                 assert.are.same(i, rolling.current_page)
-                readerui:handleEvent(Event:new("ChangeScreenMode", "portrait"))
+                readerui:handleEvent(Event:new("SetRotationMode", Screen.ORIENTATION_PORTRAIT))
                 assert.are_not.same(i, rolling.current_page)
-                readerui:handleEvent(Event:new("ChangeScreenMode", "landscape"))
+                readerui:handleEvent(Event:new("SetRotationMode", Screen.ORIENTATION_LANDSCAPE))
                 assert.are.same(i, rolling.current_page)
             end
+        end)
+    end)
+
+    describe("test changing word gap - space condensing", function()
+        it("should show pages for different word gap", function()
+            readerui:handleEvent(Event:new("SetWordSpacing", {100, 90}))
+            assert.are.same(252, readerui.document:getPageCount())
+            readerui:handleEvent(Event:new("SetWordSpacing", {95, 75}))
+            assert.are.same(241, readerui.document:getPageCount())
+            readerui:handleEvent(Event:new("SetWordSpacing", {75, 50}))
+            assert.are.same(231, readerui.document:getPageCount())
         end)
     end)
 
@@ -187,14 +203,18 @@ describe("Readerrolling module", function()
             local ReaderView = require("apps/reader/modules/readerview")
             local saved_handler = ReaderView.onPageUpdate
             ReaderView.onPageUpdate = function(_self)
-                assert.are.same(7, _self.ui.document:getPageCount())
+                assert.are.same(6, _self.ui.document:getPageCount())
             end
             local test_book = "spec/front/unit/data/sample.txt"
             require("docsettings"):open(test_book):purge()
-            ReaderUI:new{
+            local tmp_readerui = ReaderUI:new{
                 document = DocumentRegistry:openDocument(test_book),
             }
             ReaderView.onPageUpdate = saved_handler
+            tmp_readerui:closeDocument()
+            tmp_readerui:onClose()
+            readerui:closeDocument()
+            readerui:onClose()
         end)
     end)
 end)

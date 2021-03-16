@@ -21,7 +21,7 @@ local function LvDEBUG(lv, ...)
         end
     end
     if isAndroid then
-        android.LOGI("#"..line)
+        android.LOGV(line)
     else
         io.stdout:write(string.format("# %s %s\n", os.date("%x-%X"), line))
         io.stdout:flush()
@@ -52,9 +52,15 @@ function Dbg:turnOn()
         return check
     end
 
-    -- TODO: close ev.log fd for children
     -- create or clear ev log file
-    self.ev_log = io.open("ev.log", "w")
+    --- @note: On Linux, use CLOEXEC to avoid polluting the fd table of our child processes.
+    ---        Otherwise, it can be problematic w/ wpa_supplicant & USBMS...
+    ---        Note that this is entirely undocumented, but at least LuaJIT passes the mode as-is to fopen, so, we're good.
+    if jit.os == "Linux" then
+        self.ev_log = io.open("ev.log", "we")
+    else
+        self.ev_log = io.open("ev.log", "w")
+    end
 end
 
 function Dbg:turnOff()
@@ -83,8 +89,9 @@ function Dbg:v(...)
 end
 
 function Dbg:logEv(ev)
+    local ev_value = tostring(ev.value)
     local log = ev.type.."|"..ev.code.."|"
-                ..ev.value.."|"..ev.time.sec.."|"..ev.time.usec.."\n"
+                ..ev_value.."|"..ev.time.sec.."|"..ev.time.usec.."\n"
     if self.ev_log then
         self.ev_log:write(log)
         self.ev_log:flush()

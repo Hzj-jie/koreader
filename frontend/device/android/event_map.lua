@@ -14,12 +14,13 @@ return {
     [23] = "Press", -- DPAD_CENTER
     [24] = "LPgBack", -- VOLUME_UP
     [25] = "LPgFwd",  -- VOLUME_DOWN
+    [27] = "Camera",  -- CAMERA
     [56] = ".",     -- PERIOD
     [59] = "Shift", -- SHIFT_LEFT
     [60] = "Shift", -- SHIFT_RIGHT
     [62] = " ",     -- SPACE
     [63] = "Sym",   -- SYM
-    [66] = "Enter", -- ENTER
+    [66] = "Press", -- ENTER
     [67] = "Del",   -- DEL
     [76] = "/",     -- SLASH
     [82] = "Menu",  -- MENU

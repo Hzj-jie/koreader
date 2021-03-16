@@ -9,6 +9,7 @@ local _ = require("gettext")
 local NetworkMgr = require("ui/network/manager")
 
 local Goodreads = InputContainer:new {
+    name = "goodreads",
     goodreads_key = "",
     goodreads_secret = "",
 }
@@ -28,12 +29,15 @@ function Goodreads:addToMainMenu(menu_items)
         sub_item_table = {
             {
                 text = _("Settings"),
+                keep_menu_open = true,
                 callback = function() self:updateSettings() end,
             },
             {
                 text = _("Search all books"),
-                callback = function()
+                keep_menu_open = true,
+                callback = function(touchmenu_instance)
                     if self.goodreads_key ~= ""  then
+                        touchmenu_instance:closeMenu()
                         self:search("all")
                     else
                         UIManager:show(InfoMessage:new{
@@ -44,8 +48,10 @@ function Goodreads:addToMainMenu(menu_items)
             },
             {
                 text = _("Search for book by title"),
-                callback = function()
+                keep_menu_open = true,
+                callback = function(touchmenu_instance)
                     if self.goodreads_key ~= ""  then
+                        touchmenu_instance:closeMenu()
                         self:search("title")
                     else
                         UIManager:show(InfoMessage:new{
@@ -56,10 +62,11 @@ function Goodreads:addToMainMenu(menu_items)
             },
             {
                 text = _("Search for book by author"),
-                callback = function()
+                keep_menu_open = true,
+                callback = function(touchmenu_instance)
                     if self.goodreads_key ~= ""  then
+                        touchmenu_instance:closeMenu()
                         self:search("author")
-
                     else
                         UIManager:show(InfoMessage:new{
                             text = _("Please set up your Goodreads key in the settings dialog"),
@@ -76,11 +83,14 @@ function Goodreads:updateSettings()
     local text_top
     local hint_bottom
     local text_bottom
-    local text_info = "How to generate a key and a secret key:\n"..
-    "1. Go to https://www.goodreads.com/user/sign_up and create an account\n" ..
-    "2. Register for a development key on the following page: https://www.goodreads.com/user/sign_in?rd=true\n" ..
-    "3. Your key and secret key will now be available on https://www.goodreads.com/api/keys\n" ..
-    "4. Enter your generated key and your secret key in the settings dialog (Login to Goodreads window)"
+    local text_info = _([[
+How to generate a key and a secret key:
+
+1. Go to https://www.goodreads.com/user/sign_up and create an account
+2. Create a key and secret key on https://www.goodreads.com/api/keys
+3. Enter your generated key and your secret key in the settings dialog (Login to Goodreads window)
+]])
+
     if self.goodreads_key == "" then
         hint_top = _("Goodreads key left empty")
         text_top = ""
@@ -135,12 +145,12 @@ function Goodreads:updateSettings()
                 },
             },
         },
-        width = Screen:getWidth() * 0.95,
-        height = Screen:getHeight() * 0.2,
+        width = math.floor(Screen:getWidth() * 0.95),
+        height = math.floor(Screen:getHeight() * 0.2),
         input_type = "text",
     }
-    self.settings_dialog:onShowKeyboard()
     UIManager:show(self.settings_dialog)
+    self.settings_dialog:onShowKeyboard()
 end
 
 function Goodreads:saveSettings(fields)
@@ -159,16 +169,16 @@ end
 -- search_type = author - serch book by author
 -- search_type = title - search book by title
 function Goodreads:search(search_type)
+    if NetworkMgr:willRerunWhenOnline(function() self:search(search_type) end) then
+       return
+    end
+
     local title_header
     local hint
     local search_input
     local text_input
     local info
     local result
-    if not NetworkMgr:isOnline() then
-        NetworkMgr:promptWifiOn()
-        return
-    end
     if search_type == "all" then
         title_header = _("Search all books in Goodreads")
         hint = _("Title, author or ISBN")
@@ -223,8 +233,8 @@ function Goodreads:search(search_type)
             }
         },
     }
-    search_input:onShowKeyboard()
     UIManager:show(search_input)
+    search_input:onShowKeyboard()
 end
 
 return Goodreads

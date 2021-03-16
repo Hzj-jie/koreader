@@ -30,11 +30,12 @@ local Geom = require("ui/geometry")
 local GestureRange = require("ui/gesturerange")
 local UIManager = require("ui/uimanager")
 local WidgetContainer = require("ui/widget/container/widgetcontainer")
+local Device = require("device")
+local Screen = Device.screen
 local _ = require("gettext")
-local Screen = require("device").screen
 
-if require("device"):isAndroid() then
-    require("jit").off(true, true)
+if Device.should_restrict_JIT then
+    jit.off(true, true)
 end
 
 local InputContainer = WidgetContainer:new{
@@ -65,6 +66,9 @@ end
 
 function InputContainer:paintTo(bb, x, y)
     if self[1] == nil then
+        return
+    end
+    if self.skip_paint then
         return
     end
 
@@ -148,15 +152,55 @@ function InputContainer:registerTouchZones(zones)
             },
         }
         self.touch_zone_dg:addNode(zone.id)
+        -- print("added "..zone.id)
         if zone.overrides then
             for _, override_zone_id in ipairs(zone.overrides) do
+                -- print("  override "..override_zone_id)
                 self.touch_zone_dg:addNodeDep(override_zone_id, zone.id)
             end
         end
     end
+    -- print("ordering:")
     self._ordered_touch_zones = {}
     for _, zone_id in ipairs(self.touch_zone_dg:serialize()) do
         table.insert(self._ordered_touch_zones, self._zones[zone_id])
+        -- print("  "..zone_id)
+    end
+end
+
+function InputContainer:unRegisterTouchZones(zones)
+    if self.touch_zone_dg then
+        for i, zone in ipairs(zones) do
+            if self._zones[zone.id] then
+                self.touch_zone_dg:removeNode(zone.id)
+                if zone.overrides then
+                    for _, override_zone_id in ipairs(zone.overrides) do
+                        --self.touch_zone_dg:removeNodeDep(override_zone_id, zone.id)
+                        self.touch_zone_dg:removeNodeDep(override_zone_id, zone.id)
+                    end
+                end
+                for _, id in ipairs(self._ordered_touch_zones) do
+                    if id.def.id == zone.id then
+                        table.remove(self._ordered_touch_zones, i)
+                        break
+                    end
+                end
+            end
+        end
+        self._ordered_touch_zones = {}
+        if self.touch_zone_dg then
+            for _, zone_id in ipairs(self.touch_zone_dg:serialize()) do
+                table.insert(self._ordered_touch_zones, self._zones[zone_id])
+            end
+        end
+    end
+end
+
+function InputContainer:checkRegisterTouchZone(id)
+    if self.touch_zone_dg then
+        return self.touch_zone_dg:checkNode(id)
+    else
+        return false
     end
 end
 
@@ -192,6 +236,20 @@ function InputContainer:onKeyPress(key)
     end
 end
 
+-- NOTE: Currently a verbatim copy of onKeyPress ;).
+function InputContainer:onKeyRepeat(key)
+    for name, seq in pairs(self.key_events) do
+        if not seq.is_inactive then
+            for _, oneseq in ipairs(seq) do
+                if key:match(oneseq) then
+                    local eventname = seq.event or name
+                    return self:handleEvent(Event:new(eventname, seq.args, key))
+                end
+            end
+        end
+    end
+end
+
 function InputContainer:onGesture(ev)
     for _, tzone in ipairs(self._ordered_touch_zones) do
         if tzone.gs_range:match(ev) and tzone.handler(ev) then
@@ -210,14 +268,14 @@ function InputContainer:onGesture(ev)
     end
 end
 
-function InputContainer:onInput(input)
+function InputContainer:onInput(input, ignore_first_hold_release)
     local InputDialog = require("ui/widget/inputdialog")
     self.input_dialog = InputDialog:new{
         title = input.title or "",
-        input = input.input,
+        input = input.input_func and input.input_func() or input.input,
         input_hint = input.hint_func and input.hint_func() or input.hint or "",
         input_type = input.type or "number",
-        buttons = {
+        buttons = input.buttons or {
             {
                 {
                     text = input.cancel_text or _("Cancel"),
@@ -236,8 +294,8 @@ function InputContainer:onInput(input)
             },
         },
     }
-    self.input_dialog:onShowKeyboard()
     UIManager:show(self.input_dialog)
+    self.input_dialog:onShowKeyboard(ignore_first_hold_release)
 end
 
 function InputContainer:closeInputDialog()

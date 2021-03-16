@@ -1,5 +1,5 @@
 describe("Readerui module", function()
-    local DocumentRegistry, ReaderUI, DocSettings, UIManager
+    local DocumentRegistry, ReaderUI, DocSettings, UIManager, Screen
     local sample_epub = "spec/front/unit/data/leaves.epub"
     local readerui
     setup(function()
@@ -8,8 +8,10 @@ describe("Readerui module", function()
         ReaderUI = require("apps/reader/readerui")
         DocSettings = require("docsettings")
         UIManager = require("ui/uimanager")
+        Screen = require("device").screen
 
         readerui = ReaderUI:new{
+            dimen = Screen:getSize(),
             document = DocumentRegistry:openDocument(sample_epub),
         }
     end)
@@ -34,15 +36,18 @@ describe("Readerui module", function()
     it("should close document", function()
         readerui:closeDocument()
         assert(readerui.document == nil)
+        readerui:onClose()
     end)
     it("should not reset running_instance by mistake", function()
         ReaderUI:doShowReader(sample_epub)
         local new_readerui = ReaderUI:_getRunningInstance()
         assert.is.truthy(new_readerui.document)
         ReaderUI:new{
+            dimen = Screen:getSize(),
             document = DocumentRegistry:openDocument(sample_epub)
         }:onClose()
         assert.is.truthy(new_readerui.document)
+        new_readerui:closeDocument()
         new_readerui:onClose()
     end)
 end)

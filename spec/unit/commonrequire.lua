@@ -1,3 +1,14 @@
+-- don't try to overwrite metatables so we can use --auto-insulate-tests
+-- shamelessly copied from https://github.com/Olivine-Labs/busted/commit/db6d8b4be8fd099ab387efeb8232cfd905912abb
+local ffi = require "ffi"
+local old_metatype = ffi.metatype
+local exists = {}
+ffi.metatype = function(def, mttable)
+    if exists[def] then return exists[def] end
+    exists[def] = old_metatype(def, mttable)
+    return exists[def]
+end
+
 require "defaults"
 package.path = "?.lua;common/?.lua;rocks/share/lua/5.1/?.lua;frontend/?.lua;" .. package.path
 package.cpath = "?.so;common/?.so;/usr/lib/lua/?.so;rocks/lib/lua/5.1/?.so;" .. package.cpath
@@ -16,39 +27,18 @@ G_reader_settings = require("luasettings"):open(".reader")
 einkfb = require("ffi/framebuffer") --luacheck: ignore
 einkfb.dummy = true --luacheck: ignore
 
+local Device = require("device")
+
 -- init output device
-local Screen = require("device").screen
+local Screen = Device.screen
 Screen:init()
 
+local CanvasContext = require("document/canvascontext")
+CanvasContext:init(Device)
+
 -- init input device (do not show SDL window)
-local Input = require("device").input
+local Input = Device.input
 Input.dummy = true
-
-function assertAlmostEquals(expected, actual, margin)
-    if type(actual) ~= 'number' or type(expected) ~= 'number'
-        or type(margin) ~= 'number' then
-        error('assertAlmostEquals: must supply only number arguments.', 2)
-    end
-
-    assert(math.abs(expected - actual) <= margin,
-        'Values are not almost equal\n'
-            .. 'Expected: ' .. expected .. ' with margin of ' .. margin
-            .. ', received: ' .. actual
-    )
-end
-
-function assertNotAlmostEquals(expected, actual, margin)
-    if type(actual) ~= 'number' or type(expected) ~= 'number'
-        or type(margin) ~= 'number' then
-        error('assertAlmostEquals: must supply only number arguments.', 2)
-    end
-
-    assert(math.abs(expected - actual) > margin,
-        'Values are almost equal\n'
-            .. 'Expected: ' .. expected .. ' with margin of ' .. margin
-            .. ', received: ' .. actual
-    )
-end
 
 package.unload = function(module)
     if type(module) ~= "string" then return false end
@@ -112,4 +102,10 @@ end
 stopBackgroundRunner = function()
     background_runner = nil
     require("pluginshare").stopBackgroundRunner = true
+end
+
+notifyBackgroundJobsUpdated = function()
+    if background_runner then
+        background_runner:onBackgroundJobsUpdated()
+    end
 end

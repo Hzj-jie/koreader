@@ -3,6 +3,7 @@ describe("Readerhighlight module", function()
     setup(function()
         require("commonrequire")
         package.unloadAll()
+        require("document/canvascontext"):init(require("device"))
         DocumentRegistry = require("document/documentregistry")
         Event = require("ui/event")
         Geom = require("ui/geometry")
@@ -69,15 +70,20 @@ describe("Readerhighlight module", function()
         setup(function()
             local sample_epub = "spec/front/unit/data/juliet.epub"
             readerui = ReaderUI:new{
+                dimen = Screen:getSize(),
                 document = DocumentRegistry:openDocument(sample_epub),
             }
+        end)
+        teardown(function()
+            readerui:closeDocument()
+            readerui:onClose()
         end)
         before_each(function()
             UIManager:quit()
             readerui.rolling:onGotoPage(page)
             UIManager:show(readerui)
-            -- HACK: Mock UIManager:run x and y for readerui.dimen
-            -- TODO: refactor readerview's dimen handling so we can get rid of
+            --- @fixme HACK: Mock UIManager:run x and y for readerui.dimen
+            --- @todo Refactor readerview's dimen handling so we can get rid of
             -- this workaround
             readerui:paintTo(Screen.bb, 0, 0)
         end)
@@ -85,22 +91,22 @@ describe("Readerhighlight module", function()
             readerui.highlight:clear()
         end)
         it("should highlight single word", function()
-            highlight_single_word(readerui, Geom:new{ x = 260, y = 80 })
+            highlight_single_word(readerui, Geom:new{ x = 400, y = 70 })
             Screen:shot("screenshots/reader_highlight_single_word_epub.png")
             assert.truthy(readerui.view.highlight.saved[page])
         end)
         it("should highlight text", function()
             highlight_text(readerui,
-                           Geom:new{ x = 260, y = 60 },
-                           Geom:new{ x = 260, y = 90 })
+                           Geom:new{ x = 400, y = 110 },
+                           Geom:new{ x = 400, y = 170 })
             Screen:shot("screenshots/reader_highlight_text_epub.png")
             assert.truthy(readerui.view.highlight.saved[page])
         end)
         it("should response on tap gesture", function()
             tap_highlight_text(readerui,
-                               Geom:new{ x = 151, y = 120  },
-                               Geom:new{ x = 290, y = 301 },
-                               Geom:new{ x = 200, y = 268 })
+                               Geom:new{ x = 130, y = 100 },
+                               Geom:new{ x = 350, y = 395 },
+                               Geom:new{ x = 80, y = 265 })
             Screen:shot("screenshots/reader_tap_highlight_text_epub.png")
         end)
     end)
@@ -110,9 +116,14 @@ describe("Readerhighlight module", function()
         setup(function()
             local sample_pdf = "spec/front/unit/data/sample.pdf"
             readerui = ReaderUI:new{
+                dimen = Screen:getSize(),
                 document = DocumentRegistry:openDocument(sample_pdf),
             }
             readerui:handleEvent(Event:new("SetScrollMode", false))
+        end)
+        teardown(function()
+            readerui:closeDocument()
+            readerui:onClose()
         end)
         describe("for scanned page with text layer", function()
             before_each(function()
@@ -193,9 +204,14 @@ describe("Readerhighlight module", function()
         setup(function()
             local sample_pdf = "spec/front/unit/data/sample.pdf"
             readerui = ReaderUI:new{
+                dimen = Screen:getSize(),
                 document = DocumentRegistry:openDocument(sample_pdf),
             }
             readerui:handleEvent(Event:new("SetScrollMode", true))
+        end)
+        teardown(function()
+            readerui:closeDocument()
+            readerui:onClose()
         end)
         describe("for scanned page with text layer", function()
             before_each(function()

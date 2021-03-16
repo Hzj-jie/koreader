@@ -48,6 +48,8 @@ function AutoFrontlight:_schedule(settings_id)
             end
         end
     })
+    local Event = require("ui/event")
+    UIManager:broadcastEvent(Event:new("BackgroundJobsUpdated"))
 end
 
 function AutoFrontlight:_action()
@@ -88,7 +90,7 @@ end
 AutoFrontlight:init()
 
 local AutoFrontlightWidget = WidgetContainer:new{
-    name = "AutoFrontlight",
+    name = "autofrontlight",
 }
 
 function AutoFrontlightWidget:init()

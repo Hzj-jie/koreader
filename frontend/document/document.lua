@@ -3,9 +3,9 @@ local Cache = require("cache")
 local CacheItem = require("cacheitem")
 local Configurable = require("configurable")
 local DrawContext = require("ffi/drawcontext")
+local CanvasContext = require("document/canvascontext")
 local Geom = require("ui/geometry")
 local Math = require("optmath")
-local Screen = require("device").screen
 local TileCacheItem = require("document/tilecacheitem")
 local lfs = require("libs/libkoreader-lfs")
 local logger = require("logger")
@@ -134,20 +134,21 @@ function Document:fastDigest(docsettings)
         local result = docsettings:readSetting("partial_md5_checksum")
         if not result then
             logger.dbg("computing and storing partial_md5_checksum")
-            local md5 = require("ffi/MD5")
+            local bit = require("bit")
+            local md5 = require("ffi/sha2").md5
             local lshift = bit.lshift
             local step, size = 1024, 1024
-            local m = md5.new()
+            local update = md5()
             for i = -1, 10 do
                 file:seek("set", lshift(step, 2*i))
                 local sample = file:read(size)
                 if sample then
-                    m:update(sample)
+                    update(sample)
                 else
                     break
                 end
             end
-            result = m:sum()
+            result = update()
             docsettings:saveSetting("partial_md5_checksum", result)
         end
         if tmp_docsettings then
@@ -185,6 +186,48 @@ end
 
 function Document:getPageCount()
     return self.info.number_of_pages
+end
+
+-- Some functions that look quite silly, but they can be
+-- overridden for document types that support separate flows
+-- (e.g. CreDocument)
+function Document:hasNonLinearFlows()
+    return false
+end
+
+function Document:hasHiddenFlows()
+    return false
+end
+
+function Document:getNextPage(page)
+    local new_page = page + 1
+    return (new_page > 0 and new_page < self.info.number_of_pages) and new_page or 0
+end
+
+function Document:getPrevPage(page)
+    if page == 0 then return self.info.number_of_pages end
+    local new_page = page - 1
+    return (new_page > 0 and new_page < self.info.number_of_pages) and new_page or 0
+end
+
+function Document:getTotalPagesLeft(page)
+    return self.info.number_of_pages - page
+end
+
+function Document:getPageFlow(page)
+    return 0
+end
+
+function Document:getFirstPageInFlow(flow)
+    return 1
+end
+
+function Document:getTotalPagesInFlow(flow)
+    return self.info.number_of_pages
+end
+
+function Document:getPageNumberInFlow(page)
+    return page
 end
 
 -- calculates page dimensions
@@ -230,10 +273,10 @@ function Document:getUsedBBoxDimensions(pageno, zoom, rotation)
     -- clipping page bbox
     if bbox.x0 < 0 then bbox.x0 = 0 end
     if bbox.y0 < 0 then bbox.y0 = 0 end
-    if bbox.x1 < 0 then bbox.x1 = 0 end
-    if bbox.y1 < 0 then bbox.y1 = 0 end
+    if bbox.x1 and bbox.x1 < 0 then bbox.x1 = 0 end
+    if bbox.y1 and bbox.y1 < 0 then bbox.y1 = 0 end
     local ubbox_dimen
-    if (bbox.x0 >= bbox.x1) or (bbox.y0 >= bbox.y1) then
+    if (not bbox.x1 or bbox.x0 >= bbox.x1) or (not bbox.y1 or bbox.y0 >= bbox.y1) then
         -- if document's bbox info is corrupted, we use the page size
         ubbox_dimen = self:getPageDimensions(pageno, zoom, rotation)
     else
@@ -254,6 +297,14 @@ function Document:getToc()
     return self._document:getToc()
 end
 
+function Document:canHaveAlternativeToc()
+    return false
+end
+
+function Document:isTocAlternativeToc()
+    return false
+end
+
 function Document:getPageLinks(pageno)
     return nil
 end
@@ -263,6 +314,10 @@ function Document:getLinkFromPosition(pageno, pos)
 end
 
 function Document:getImageFromPosition(pos)
+    return nil
+end
+
+function Document:getTextFromPositions(pos0, pos1)
     return nil
 end
 
@@ -283,7 +338,7 @@ function Document:findText()
 end
 
 function Document:updateColorRendering()
-    if self.is_color_capable and Screen:isColorEnabled() then
+    if self.is_color_capable and CanvasContext.is_color_rendering_enabled then
         self.render_color = true
     else
         self.render_color = false
@@ -301,6 +356,7 @@ end
 function Document:getFullPageHash(pageno, zoom, rotation, gamma, render_mode, color)
     return "renderpg|"..self.file.."|"..self.mod_time.."|"..pageno.."|"
                     ..zoom.."|"..rotation.."|"..gamma.."|"..render_mode..(color and "|color" or "")
+                    ..(self.reflowable_font_size and "|"..self.reflowable_font_size or "")
 end
 
 function Document:renderPage(pageno, rect, zoom, rotation, gamma, render_mode)
@@ -322,7 +378,7 @@ function Document:renderPage(pageno, rect, zoom, rotation, gamma, render_mode)
     if not Cache:willAccept(size.w * size.h + 64) then
         -- whole page won't fit into cache
         logger.dbg("rendering only part of the page")
-        -- TODO: figure out how to better segment the page
+        --- @todo figure out how to better segment the page
         if not rect then
             logger.warn("aborting, since we do not have a specification for that part")
             -- required part not given, so abort
@@ -371,7 +427,7 @@ function Document:renderPage(pageno, rect, zoom, rotation, gamma, render_mode)
 end
 
 -- a hint for the cache engine to paint a full page to the cache
--- TODO: this should trigger a background operation
+--- @todo this should trigger a background operation
 function Document:hintPage(pageno, zoom, rotation, gamma, render_mode)
     logger.dbg("hinting page", pageno)
     self:renderPage(pageno, nil, zoom, rotation, gamma, render_mode)
@@ -392,6 +448,27 @@ function Document:drawPage(target, x, y, rect, pageno, zoom, rotation, gamma, re
         rect.x - tile.excerpt.x,
         rect.y - tile.excerpt.y,
         rect.w, rect.h)
+end
+
+function Document:getDrawnImagesStatistics()
+    -- For now, only set by CreDocument in CreDocument:drawCurrentView()
+    return self._drawn_images_count, self._drawn_images_surface_ratio
+end
+
+function Document:getPagePart(pageno, rect, rotation)
+    local canvas_size = CanvasContext:getSize()
+    local zoom = math.min(canvas_size.w*2 / rect.w, canvas_size.h*2 / rect.h)
+    -- it's really, really important to do math.floor, otherwise we get image projection
+    local scaled_rect = {
+        x = math.floor(rect.x * zoom),
+        y = math.floor(rect.y * zoom),
+        w = math.floor(rect.w * zoom),
+        h = math.floor(rect.h * zoom),
+    }
+    local tile = self:renderPage(pageno, scaled_rect, zoom, rotation, 1, 0)
+    local target = Blitbuffer.new(scaled_rect.w, scaled_rect.h, self.render_color and self.color_bb_type or nil)
+    target:blitFrom(tile.bb, 0, 0, scaled_rect.x, scaled_rect.y, scaled_rect.w, scaled_rect.h)
+    return target
 end
 
 function Document:getPageText(pageno)

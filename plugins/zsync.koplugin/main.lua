@@ -1,3 +1,4 @@
+local DataStorage = require("datastorage")
 local InputContainer = require("ui/widget/container/inputcontainer")
 local InfoMessage = require("ui/widget/infomessage")
 local UIManager = require("ui/uimanager")
@@ -6,6 +7,7 @@ local DEBUG = require("dbg")
 local _ = require("gettext")
 
 local ffi = require("ffi")
+local C = ffi.C
 ffi.cdef[[
 int remove(const char *);
 int rmdir(const char *);
@@ -19,7 +21,7 @@ local ZSync = InputContainer:new{
 
 function ZSync:init()
     self.ui.menu:registerToMainMenu(self)
-    self.outbox = self.path.."/outbox"
+    self.outbox = DataStorage:getFullDataDir().."/zsync-outbox"
     self.server_config = self.path.."/server.cfg"
     self.client_config = self.path.."/client.cfg"
 end
@@ -39,15 +41,14 @@ function ZSync:addToMainMenu(menu_items)
                 end,
                 callback = function()
                     local NetworkMgr = require("ui/network/manager")
-                    if not NetworkMgr:isOnline() then
-                        NetworkMgr:promptWifiOn()
-                        return
+                    local connect_callback = function()
+                        if not self.filemq_server then
+                            self:publish()
+                        else
+                            self:unpublish()
+                        end
                     end
-                    if not self.filemq_server then
-                        self:publish()
-                    else
-                        self:unpublish()
-                    end
+                    NetworkMgr:runWhenOnline(connect_callback)
                 end
             },
             {
@@ -60,11 +61,15 @@ function ZSync:addToMainMenu(menu_items)
                     return self.filemq_server == nil
                 end,
                 callback = function()
-                    if not self.filemq_client then
-                        self:subscribe()
-                    else
-                        self:unsubscribe()
+                    local NetworkMgr = require("ui/network/manager")
+                    local connect_callback = function()
+                        if not self.filemq_client then
+                            self:subscribe()
+                        else
+                            self:unsubscribe()
+                        end
                     end
+                    NetworkMgr:runWhenOnline(connect_callback)
                 end
             }
         }
@@ -131,13 +136,13 @@ local function clearDirectory(dir, rmdir)
         local path = dir.."/"..f
         local mode = lfs.attributes(path, "mode")
         if mode == "file" then
-            ffi.C.remove(path)
+            C.remove(path)
         elseif mode == "directory" and f ~= "." and f ~= ".." then
             clearDirectory(path, true)
         end
     end
     if rmdir then
-        ffi.C.rmdir(dir)
+        C.rmdir(dir)
     end
 end
 
@@ -228,7 +233,7 @@ function ZSync:subscribe()
     self.received = {}
     local zsync = self
     require("ui/downloadmgr"):new{
-        title = _("Choose inbox by long-pressing"),
+        show_hidden = G_reader_settings:isTrue("show_hidden"),
         onConfirm = function(inbox)
             G_reader_settings:saveSetting("inbox_dir", inbox)
             zsync:onChooseInbox(inbox)

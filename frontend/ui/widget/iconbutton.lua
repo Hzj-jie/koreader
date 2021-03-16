@@ -6,20 +6,20 @@ local Device = require("device")
 local HorizontalGroup = require("ui/widget/horizontalgroup")
 local HorizontalSpan = require("ui/widget/horizontalspan")
 local InputContainer = require("ui/widget/container/inputcontainer")
-local ImageWidget = require("ui/widget/imagewidget")
+local IconWidget = require("ui/widget/iconwidget")
 local GestureRange = require("ui/gesturerange")
 local UIManager = require("ui/uimanager")
 local VerticalGroup = require("ui/widget/verticalgroup")
 local VerticalSpan = require("ui/widget/verticalspan")
+local Screen = Device.screen
 
 local IconButton = InputContainer:new{
-    icon_file = "resources/info-confirm.png",
+    icon = "notice-warning",
     dimen = nil,
     -- show_parent is used for UIManager:setDirty, so we can trigger repaint
     show_parent = nil,
-    width = nil,
-    height = nil,
-    scale_for_dpi = true,
+    width = Screen:scaleBySize(DGENERIC_ICON_SIZE), -- our icons are square
+    height = Screen:scaleBySize(DGENERIC_ICON_SIZE),
     padding = 0,
     padding_top = nil,
     padding_right = nil,
@@ -30,9 +30,8 @@ local IconButton = InputContainer:new{
 }
 
 function IconButton:init()
-    self.image = ImageWidget:new{
-        file = self.icon_file,
-        scale_for_dpi = self.scale_for_dpi,
+    self.image = IconWidget:new{
+        icon = self.icon,
         width = self.width,
         height = self.height,
     }
@@ -92,23 +91,43 @@ function IconButton:initGesListener()
 end
 
 function IconButton:onTapIconButton()
+    if not self.callback then return end
     if G_reader_settings:isFalse("flash_ui") then
         self.callback()
     else
-        UIManager:scheduleIn(0.0, function()
-            self.image.invert = true
-            UIManager:setDirty(self.show_parent, function()
-                return "ui", self[1].dimen
-            end)
-        end)
-        -- make sure button reacts before doing callback
-        UIManager:scheduleIn(0.1, function()
-            self.callback()
-            self.image.invert = false
-            UIManager:setDirty(self.show_parent, function()
-                return "ui", self[1].dimen
-            end)
-        end)
+        -- c.f., ui/widget/button for more gnarly details about the implementation, but the flow of the flash_ui codepath essentially goes like this:
+        -- 1. Paint the highlight
+        -- 2. Refresh the highlighted item (so we can see the highlight)
+        -- 3. Paint the unhighlight
+        -- 4. Do NOT refresh the highlighted item, but enqueue a refresh request
+        -- 5. Run the callback
+        -- 6. Explicitly drain the paint & refresh queues; i.e., refresh (so we get to see both the callback results, and the unhighlight).
+
+        -- Highlight
+        --
+        self.image.invert = true
+        UIManager:widgetInvert(self.image, self.dimen.x + self.padding_left, self.dimen.y + self.padding_top)
+        UIManager:setDirty(nil, "fast", self.dimen)
+
+        UIManager:forceRePaint()
+        UIManager:yieldToEPDC()
+
+        -- Unhighlight
+        --
+        self.image.invert = false
+        UIManager:widgetInvert(self.image, self.dimen.x + self.padding_left, self.dimen.y + self.padding_top)
+
+        -- Callback
+        --
+        self.callback()
+
+        -- NOTE: plugins/coverbrowser.koplugin/covermenu (ab)uses UIManager:clearRenderStack,
+        --       so we need to enqueue the actual refresh request for the unhighlight post-callback,
+        --       otherwise, it's lost.
+        --       This changes nothing in practice, since we follow by explicitly requesting to drain the refresh queue ;).
+        UIManager:setDirty(nil, "fast", self.dimen)
+
+        UIManager:forceRePaint()
     end
     return true
 end
@@ -120,8 +139,23 @@ function IconButton:onHoldIconButton()
         self:onInput(self.hold_input)
     elseif type(self.hold_input_func) == "function" then
         self:onInput(self.hold_input_func())
-    end
+    elseif self.hold_callback == nil then return end
     return true
+end
+
+function IconButton:onFocus()
+    --quick and dirty, need better way to show focus
+    self.image.invert = true
+    return true
+end
+
+function IconButton:onUnfocus()
+    self.image.invert = false
+    return true
+end
+
+function IconButton:onTapSelect()
+    self:onTapIconButton()
 end
 
 return IconButton

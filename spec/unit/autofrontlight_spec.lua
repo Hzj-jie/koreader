@@ -4,6 +4,7 @@ describe("AutoFrontlight widget tests", function()
     setup(function()
         require("commonrequire")
         package.unloadAll()
+        require("document/canvascontext"):init(require("device"))
 
         MockTime = require("mock_time")
         MockTime:install()
@@ -22,6 +23,7 @@ describe("AutoFrontlight widget tests", function()
     teardown(function()
         MockTime:uninstall()
         package.unloadAll()
+        require("document/canvascontext"):init(require("device"))
     end)
 
     before_each(function()
@@ -39,7 +41,7 @@ describe("AutoFrontlight widget tests", function()
         Device.input.waitEvent = function() end
         require("luasettings"):
             open(require("datastorage"):getSettingsDir() .. "/autofrontlight.lua"):
-            saveSetting("enable", "true"):
+            saveSetting("enable", true):
             close()
 
         UIManager = require("ui/uimanager")
@@ -47,6 +49,7 @@ describe("AutoFrontlight widget tests", function()
 
         requireBackgroundRunner()
         class = dofile("plugins/autofrontlight.koplugin/main.lua")
+        notifyBackgroundJobsUpdated()
 
         -- Ensure the background runner has succeeded set the job.insert_sec.
         MockTime:increase(2)
@@ -107,6 +110,7 @@ describe("AutoFrontlight widget tests", function()
     end)
 
     it("should turn on frontlight at the begining", function()
+        Device:getPowerDevice():turnOffFrontlight()
         Device.brightness = 0
         AutoFrontlight = class:new()
         MockTime:increase(2)
@@ -115,6 +119,7 @@ describe("AutoFrontlight widget tests", function()
     end)
 
     it("should turn off frontlight at the begining", function()
+        Device:getPowerDevice():turnOnFrontlight()
         Device.brightness = 3
         AutoFrontlight = class:new()
         MockTime:increase(2)
@@ -123,6 +128,7 @@ describe("AutoFrontlight widget tests", function()
     end)
 
     it("should handle configuration update", function()
+        Device:getPowerDevice():turnOffFrontlight()
         Device.brightness = 0
         AutoFrontlight = class:new()
         MockTime:increase(2)

@@ -1,9 +1,11 @@
 local Blitbuffer = require("ffi/blitbuffer")
 local CenterContainer = require("ui/widget/container/centercontainer")
 local CloseButton = require("ui/widget/closebutton")
+local Device = require("device")
 local Font = require("ui/font")
 local FrameContainer = require("ui/widget/container/framecontainer")
 local Geom = require("ui/geometry")
+local GestureRange = require("ui/gesturerange")
 local HorizontalGroup = require("ui/widget/horizontalgroup")
 local HorizontalSpan = require("ui/widget/horizontalspan")
 local InputContainer = require("ui/widget/container/inputcontainer")
@@ -18,10 +20,10 @@ local VerticalGroup = require("ui/widget/verticalgroup")
 local VerticalSpan = require("ui/widget/verticalspan")
 local util = require("util")
 local _ = require("gettext")
-local Screen = require("device").screen
+local Screen = Device.screen
 
-local LINE_COLOR = Blitbuffer.gray(0.4)
-local BG_COLOR = Blitbuffer.gray(0.2)
+local LINE_COLOR = Blitbuffer.COLOR_WEB_GRAY
+local BG_COLOR = Blitbuffer.COLOR_LIGHT_GRAY
 
 local ReaderProgress = InputContainer:new{
     padding = Size.padding.fullscreen,
@@ -38,14 +40,39 @@ local dayOfWeekTranslation = {
 }
 
 function ReaderProgress:init()
+    self.current_pages = tostring(self.current_pages)
+    self.today_pages = tostring(self.today_pages)
     self.small_font_face = Font:getFace("smallffont")
     self.medium_font_face = Font:getFace("ffont")
     self.large_font_face = Font:getFace("largeffont")
     self.screen_width = Screen:getWidth()
     self.screen_height = Screen:getHeight()
+    if self.screen_width < self.screen_height then
+        self.header_span = 25
+        self.stats_span = 20
+    else
+        self.header_span = 0
+        self.stats_span = 10
+    end
     UIManager:setDirty(self, function()
         return "ui", self.dimen
     end)
+    if Device:hasKeys() then
+        self.key_events = {
+            --don't get locked in on non touch devices
+            AnyKeyPressed = { { Device.input.group.Any },
+            seqtext = "any key", doc = "close dialog" }
+        }
+    end
+    if Device:isTouchDevice() then
+        self.ges_events.Swipe = {
+            GestureRange:new{
+                ges = "swipe",
+                range = function() return self.dimen end,
+            }
+        }
+    end
+    self.covers_fullscreen = true -- hint for UIManager:_repaint()
     self[1] = FrameContainer:new{
         width = self.width,
         height = self.height,
@@ -106,7 +133,7 @@ function ReaderProgress:genSingleHeader(title)
     }
 
     return VerticalGroup:new{
-        VerticalSpan:new{ width = Screen:scaleBySize(25), height = self.screen_height / 25 },
+        VerticalSpan:new{ width = Screen:scaleBySize(self.header_span), height = self.screen_height / 25 },
         HorizontalGroup:new{
             align = "center",
             padding_span,
@@ -198,7 +225,7 @@ function ReaderProgress:genWeekStats(stats_day)
     local span_group = HorizontalGroup:new{
         align = "center",
         LeftContainer:new{
-            dimen = Geom:new{ h = Screen:scaleBySize(20) },
+            dimen = Geom:new{ h = Screen:scaleBySize(self.stats_span) },
             padding_span
         },
     }
@@ -230,7 +257,7 @@ function ReaderProgress:genWeekStats(stats_day)
             LeftContainer:new{
                 dimen = Geom:new{ w = self.screen_width , h = height / 3 },
                 ProgressWidget:new{
-                    width = (self.screen_width * 0.005) + (self.screen_width * 0.9 * select_day_time / max_week_time),
+                    width = math.floor((self.screen_width * 0.005) + (self.screen_width * 0.9 * select_day_time / max_week_time)),
                     height = Screen:scaleBySize(14),
                     percentage = 1.0,
                     ticks = nil,
@@ -246,7 +273,7 @@ function ReaderProgress:genWeekStats(stats_day)
     end  --for i=1
     table.insert(statistics_container, statistics_group)
     return CenterContainer:new{
-        dimen = Geom:new{ w = self.screen_width * 1.1 , h = self.screen_height * 0.50 },
+        dimen = Geom:new{ w = math.floor(self.screen_width * 1.1), h = math.floor(self.screen_height * 0.5) },
         statistics_container,
     }
 end
@@ -313,7 +340,7 @@ function ReaderProgress:genSummaryDay(width)
         CenterContainer:new{
             dimen = Geom:new{ w = tile_width, h = tile_height },
             TextWidget:new{
-                text = util.secondsToClock(self.current_period, true),
+                text = util.secondsToClock(self.current_duration, true),
                 face = self.medium_font_face,
             },
         },
@@ -327,7 +354,7 @@ function ReaderProgress:genSummaryDay(width)
         CenterContainer:new{
             dimen = Geom:new{ w = tile_width, h = tile_height },
             TextWidget:new{
-                text = util.secondsToClock(self.today_period, true),
+                text = util.secondsToClock(self.today_duration, true),
                 face = self.medium_font_face,
             },
         },
@@ -339,7 +366,7 @@ function ReaderProgress:genSummaryDay(width)
     table.insert(statistics_group, span_group)
     table.insert(statistics_container, statistics_group)
     return CenterContainer:new{
-        dimen = Geom:new{ w = self.screen_width , h = self.screen_height * 0.13 },
+        dimen = Geom:new{ w = self.screen_width , h = math.floor(self.screen_height * 0.13) },
         statistics_container,
     }
 end
@@ -432,7 +459,7 @@ function ReaderProgress:genSummaryWeek(width)
         CenterContainer:new{
             dimen = Geom:new{ w = tile_width, h = tile_height },
             TextWidget:new{
-                text = total_pages,
+                text = tostring(total_pages),
                 face = self.medium_font_face,
             },
         },
@@ -446,7 +473,7 @@ function ReaderProgress:genSummaryWeek(width)
         CenterContainer:new{
             dimen = Geom:new{ w = tile_width, h = tile_height },
             TextWidget:new{
-                text = math.floor(total_pages / 7),
+                text = tostring(math.floor(total_pages / 7)),
                 face = self.medium_font_face,
             }
         },
@@ -464,13 +491,29 @@ function ReaderProgress:genSummaryWeek(width)
     table.insert(statistics_group, data_group)
     table.insert(statistics_container, statistics_group)
     return CenterContainer:new{
-        dimen = Geom:new{ w = self.screen_width , h = self.screen_height * 0.10 },
+        dimen = Geom:new{ w = self.screen_width , h = math.floor(self.screen_height * 0.10) },
         statistics_container,
     }
 end
 
 function ReaderProgress:onAnyKeyPressed()
     return self:onClose()
+end
+
+function ReaderProgress:onSwipe(arg, ges_ev)
+    if ges_ev.direction == "south" then
+        -- Allow easier closing with swipe up/down
+        self:onClose()
+    elseif ges_ev.direction == "east" or ges_ev.direction == "west" or ges_ev.direction == "north" then
+        -- no use for now
+        do end -- luacheck: ignore 541
+    else -- diagonal swipe
+        -- trigger full refresh
+        UIManager:setDirty(nil, "full")
+        -- a long diagonal swipe may also be used for taking a screenshot,
+        -- so let it propagate
+        return false
+    end
 end
 
 function ReaderProgress:onClose()

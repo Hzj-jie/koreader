@@ -16,8 +16,10 @@ local SystemStat = {
 }
 
 function SystemStat:init()
-    if Device:isKobo() or Device:isPocketBook() then
+    if Device:isCervantes() or Device:isPocketBook() then
         self.storage_filter = "mmcblk"
+    elseif Device:isKobo() then
+        self.storage_filter = " /mnt/"
     elseif Device:isKindle() then
         self.storage_filter = "' /mnt/us$'"
     elseif Device:isSDL() then
@@ -27,6 +29,10 @@ end
 
 function SystemStat:put(p)
     table.insert(self.kv_pairs, p)
+end
+
+function SystemStat:putSeparator()
+    self.kv_pairs[#self.kv_pairs].separator = true
 end
 
 function SystemStat:appendCounters()
@@ -41,6 +47,7 @@ function SystemStat:appendCounters()
              string.format("%.2f", os.difftime(os.time(), self.start_sec) / 60 / 60)})
     self:put({_("Counters"), ""})
     self:put({_("  wake-ups"), self.wakeup_count})
+    -- @translators The number of "sleeps", that is the number of times the device has entered standby. This could also be translated as a rendition of a phrase like "entered sleep".
     self:put({_("  sleeps"), self.sleep_count})
     self:put({_("  charge cycles"), self.charge_count})
     self:put({_("  discharge cycles"), self.discharge_count})
@@ -51,7 +58,7 @@ local function systemInfo()
     do
         local stat = io.open("/proc/stat", "r")
         if stat ~= nil then
-            for line in util.gsplit(stat:read("*all"), "\n", false) do
+            for line in stat:lines() do
                 local t = util.splitToArray(line, " ")
                 if #t >= 5 and string.lower(t[1]) == "cpu" then
                     local n1, n2, n3, n4
@@ -79,7 +86,7 @@ local function systemInfo()
         local meminfo = io.open("/proc/meminfo", "r")
         if meminfo ~= nil then
             result.memory = {}
-            for line in util.gsplit(meminfo:read("*all"), "\n", false) do
+            for line in meminfo:lines() do
                 local t = util.splitToArray(line, " ")
                 if #t >= 2 then
                     if string.lower(t[1]) == "memtotal:" then
@@ -110,8 +117,10 @@ function SystemStat:appendSystemInfo()
     local stat = systemInfo()
     if stat.cpu ~= nil then
         self:put({_("System information"), ""})
+        -- @translators Ticks is a highly technical term. See https://superuser.com/a/101202 The correct translation is likely to simply be "ticks".
         self:put({_("  Total ticks (million)"),
                  string.format("%.2f", stat.cpu.total / 1000000)})
+        -- @translators Ticks is a highly technical term. See https://superuser.com/a/101202 The correct translation is likely to simply be "ticks".
         self:put({_("  Idle ticks (million)"),
                  string.format("%.2f", stat.cpu.idle / 1000000)})
         self:put({_("  Processor usage %"),
@@ -137,7 +146,7 @@ function SystemStat:appendProcessInfo()
     local stat = io.open("/proc/self/stat", "r")
     if stat == nil then return end
 
-    local t = util.splitToArray(stat:read("*all"), " ")
+    local t = util.splitToArray(stat:read("*line"), " ")
     stat:close()
 
     local n1, n2
@@ -192,7 +201,7 @@ function SystemStat:appendStorageInfo()
     if not std_out then return end
 
     self:put({_("Storage information"), ""})
-    for line in util.gsplit(std_out:read("*all"), "\n", false) do
+    for line in std_out:lines() do
         local t = util.splitToArray(line, "\t")
         if #t ~= 4 then
             self:put({_("  Unexpected"), line})
@@ -227,8 +236,11 @@ end
 function SystemStat:showStatistics()
     self.kv_pairs = {}
     self:appendCounters()
+    self:putSeparator()
     self:appendProcessInfo()
+    self:putSeparator()
     self:appendStorageInfo()
+    self:putSeparator()
     self:appendSystemInfo()
     UIManager:show(KeyValuePage:new{
         title = _("System statistics"),
@@ -249,6 +261,7 @@ end
 function SystemStatWidget:addToMainMenu(menu_items)
     menu_items.system_statistics = {
         text = _("System statistics"),
+        keep_menu_open = true,
         callback = function()
             SystemStat:showStatistics()
         end,

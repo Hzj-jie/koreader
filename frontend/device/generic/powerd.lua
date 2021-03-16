@@ -1,5 +1,4 @@
 local logger = require("logger")
-
 local BasePowerD = {
     fl_min = 0,                       -- min frontlight intensity
     fl_max = 10,                      -- max frontlight intensity
@@ -18,24 +17,9 @@ function BasePowerD:new(o)
     self.__index = self
     assert(o.fl_min < o.fl_max)
     if o.init then o:init() end
-    if o.device and o.device.hasFrontlight() then
+    if o.device and o.device:hasFrontlight() then
         o.fl_intensity = o:frontlightIntensityHW()
         o:_decideFrontlightState()
-        -- Note added by @Frenzie 2017-10-08
-        -- I believe this should be `if isKobo()`, or better yet that the entire
-        -- block should be moved to `KoboPowerD:init()` because afaik that is the
-        -- only platform where the system doesn't provide trustworthy frontlight
-        -- information. But to be absolutely sure that I don't break anything (and I
-        -- don't want to spend any time on this atm) I'm temporarily excluding only
-        -- Android where this behavior is known to be problematic.
-        -- See discussion in https://github.com/koreader/koreader/issues/3118#issuecomment-334995879
-        if not o.device:isAndroid() then
-            if o:isFrontlightOn() then
-                o:turnOnFrontlightHW()
-            else
-                o:turnOffFrontlightHW()
-            end
-        end
     end
     return o
 end
@@ -43,11 +27,13 @@ end
 function BasePowerD:init() end
 function BasePowerD:setIntensityHW(intensity) end
 function BasePowerD:getCapacityHW() return 0 end
+function BasePowerD:getDissmisBatteryStatus() return self.battery_warning end
+function BasePowerD:setDissmisBatteryStatus(status) self.battery_warning = status end
 function BasePowerD:isChargingHW() return false end
 function BasePowerD:frontlightIntensityHW() return 0 end
 function BasePowerD:isFrontlightOnHW() return self.fl_intensity > self.fl_min end
-function BasePowerD:turnOffFrontlightHW() self:_setIntensity(self.fl_min) end
-function BasePowerD:turnOnFrontlightHW() self:_setIntensity(self.fl_intensity) end
+function BasePowerD:turnOffFrontlightHW() self:setIntensityHW(self.fl_min) end
+function BasePowerD:turnOnFrontlightHW() self:setIntensityHW(self.fl_intensity) end --- @fixme: what if fl_intensity == fl_min (c.f., kindle)?
 -- Anything needs to be done before do a real hardware suspend. Such as turn off
 -- front light.
 function BasePowerD:beforeSuspend() end
@@ -62,7 +48,7 @@ end
 
 function BasePowerD:_decideFrontlightState()
     assert(self ~= nil)
-    assert(self.device.hasFrontlight())
+    assert(self.device:hasFrontlight())
     self.is_fl_on = self:isFrontlightOnHW()
 end
 
@@ -72,14 +58,14 @@ end
 
 function BasePowerD:frontlightIntensity()
     assert(self ~= nil)
-    if not self.device.hasFrontlight() then return 0 end
+    if not self.device:hasFrontlight() then return 0 end
     if self:isFrontlightOff() then return 0 end
     return self.fl_intensity
 end
 
 function BasePowerD:toggleFrontlight()
     assert(self ~= nil)
-    if not self.device.hasFrontlight() then return false end
+    if not self.device:hasFrontlight() then return false end
     if self:isFrontlightOn() then
         return self:turnOffFrontlight()
     else
@@ -89,38 +75,40 @@ end
 
 function BasePowerD:turnOffFrontlight()
     assert(self ~= nil)
-    if not self.device.hasFrontlight() then return end
+    if not self.device:hasFrontlight() then return end
     if self:isFrontlightOff() then return false end
-    self.is_fl_on = false
     self:turnOffFrontlightHW()
+    self.is_fl_on = false
+    self:stateChanged()
     return true
 end
 
 function BasePowerD:turnOnFrontlight()
     assert(self ~= nil)
-    if not self.device.hasFrontlight() then return end
+    if not self.device:hasFrontlight() then return end
     if self:isFrontlightOn() then return false end
-    if self.fl_intensity == self.fl_min then return false end
-    self.is_fl_on = true
+    if self.fl_intensity == self.fl_min then return false end  --- @fixme what the hell?
     self:turnOnFrontlightHW()
+    self.is_fl_on = true
+    self:stateChanged()
     return true
 end
 
 function BasePowerD:read_int_file(file)
-    local fd =  io.open(file, "r")
+    local fd = io.open(file, "r")
     if fd then
-        local int = fd:read("*all"):match("%d+")
+        local int = fd:read("*number")
         fd:close()
-        return int and tonumber(int) or 0
+        return int or 0
     else
         return 0
     end
 end
 
 function BasePowerD:read_str_file(file)
-    local fd =  io.open(file, "r")
+    local fd = io.open(file, "r")
     if fd then
-        local str = fd:read("*all")
+        local str = fd:read("*line")
         fd:close()
         return str
     else
@@ -134,19 +122,21 @@ function BasePowerD:normalizeIntensity(intensity)
 end
 
 function BasePowerD:setIntensity(intensity)
-    if not self.device.hasFrontlight() then return false end
+    if not self.device:hasFrontlight() then return false end
     if intensity == self:frontlightIntensity() then return false end
     self.fl_intensity = self:normalizeIntensity(intensity)
     self:_decideFrontlightState()
     logger.dbg("set light intensity", self.fl_intensity)
-    self:_setIntensity(self.fl_intensity)
+    self:setIntensityHW(self.fl_intensity)
+    self:stateChanged()
     return true
 end
 
 function BasePowerD:getCapacity()
-    if os.time() - self.last_capacity_pull_time >= 60 then
+    local now_ts = os.time()
+    if now_ts - self.last_capacity_pull_time >= 60 then
         self.battCapacity = self:getCapacityHW()
-        self.last_capacity_pull_time = os.time()
+        self.last_capacity_pull_time = now_ts
     end
     return self.battCapacity
 end
@@ -155,10 +145,8 @@ function BasePowerD:isCharging()
     return self:isChargingHW()
 end
 
-function BasePowerD:_setIntensity(intensity)
-    self:setIntensityHW(intensity)
-    -- BasePowerD is loaded before UIManager. So we cannot broadcast events before UIManager has
-    -- been loaded.
+function BasePowerD:stateChanged()
+    -- BasePowerD is loaded before UIManager. So we cannot broadcast events before UIManager has been loaded.
     if package.loaded["ui/uimanager"] ~= nil then
         local Event = require("ui/event")
         local UIManager = require("ui/uimanager")
